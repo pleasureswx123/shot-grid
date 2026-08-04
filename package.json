@@ -1,0 +1,49 @@
+{
+  "name": "shotgrid-light",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch server/index.ts",
+    "dev:local": "npm run db:start && npm run dev",
+    "dev:client": "vite --port=3000 --host=0.0.0.0",
+    "build": "vite build && npm run build:server",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --packages=external --outfile=server.js",
+    "start": "node server.js",
+    "db:migrate": "tsx server/migrate.ts",
+    "db:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/postgres.ps1 start",
+    "db:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/postgres.ps1 stop",
+    "db:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/postgres.ps1 status",
+    "verify:files": "node scripts/verify-file-api.mjs",
+    "test": "tsx --test server/security.test.ts server/permissions.test.ts server/storage.test.ts src/context/projectState.test.ts src/utils/assetImport.test.ts",
+    "preview": "vite preview",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@google/genai": "^2.4.0",
+    "@tailwindcss/vite": "^4.1.14",
+    "@vitejs/plugin-react": "^5.0.4",
+    "dotenv": "^17.2.3",
+    "express": "^4.21.2",
+    "lucide-react": "^0.546.0",
+    "motion": "^12.23.24",
+    "multer": "^2.0.2",
+    "pg": "^8.16.3",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "vite": "^6.2.3",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@types/multer": "^2.0.0",
+    "@types/pg": "^8.15.5",
+    "autoprefixer": "^10.4.21",
+    "esbuild": "^0.25.0",
+    "tailwindcss": "^4.1.14",
+    "tsx": "^4.21.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.3",
+    "@types/express": "^4.17.21"
+  }
+}

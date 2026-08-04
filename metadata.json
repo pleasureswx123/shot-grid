@@ -1,0 +1,6 @@
+{
+  "name": "AI影视项目管理系统",
+  "description": "ShotGrid轻量化AI影视项目管理工具，支持镜头与资产流程、AI生成参数面板、时间点画板批注与审核单全流程集评。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
