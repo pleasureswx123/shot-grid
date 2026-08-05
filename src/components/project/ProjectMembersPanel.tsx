@@ -13,6 +13,13 @@ const roleLabels: Record<UserRole, string> = {
   client: '外部审核',
 };
 
+const roleDescriptions: Record<UserRole, string> = {
+  admin: '可查看/编辑项目、管理成员、创建任务和审核单、提交/审核版本、评论审核、删除文件。',
+  director: '可管理成员与内容流程，具备创建任务、审核单、提交/审核版本、评论审核、删除文件权限。',
+  creator: '可查看项目、创建任务、提交版本、回复审核意见和参与评论，不能管理成员或删除文件。',
+  client: '可查看项目、查看审核单、评论审核并参与版本审核，不能提交版本或改动项目设置。',
+};
+
 export const ProjectMembersPanel: React.FC = () => {
   const { user } = useAuth();
   const {
@@ -107,7 +114,7 @@ export const ProjectMembersPanel: React.FC = () => {
               className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500"
             >
               {Object.entries(roleLabels).map(([value, label]) => (
-                <option key={value} value={value}>{label}</option>
+                <option key={value} value={value}>{label}｜{roleDescriptions[value as UserRole]}</option>
               ))}
             </select>
             <button
@@ -118,6 +125,13 @@ export const ProjectMembersPanel: React.FC = () => {
               {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
               <span>添加成员</span>
             </button>
+          </div>
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+            {Object.entries(roleDescriptions).map(([value, description]) => (
+              <div key={value} className="rounded-lg border border-slate-800 bg-slate-950/50 p-2 text-[10px] text-slate-400">
+                <span className="font-bold text-slate-200">{roleLabels[value as UserRole]}</span>：{description}
+              </div>
+            ))}
           </div>
           {availableUsers.length === 0 && (
             <p className="mt-2 text-[10px] text-slate-500">所有已启用员工都已加入当前项目。</p>
@@ -158,6 +172,9 @@ export const ProjectMembersPanel: React.FC = () => {
                   <div className="mt-1 inline-flex items-center space-x-1 text-[9px] text-amber-300">
                     <ShieldCheck className="w-3 h-3" />
                     <span>{roleLabels[member.projectRole]}</span>
+                  </div>
+                  <div className="mt-1 text-[9px] leading-relaxed text-slate-500">
+                    {roleDescriptions[member.projectRole]}
                   </div>
                 </div>
               </div>

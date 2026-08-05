@@ -1,7 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { NextFunction, Request, Response } from 'express';
-import { requireRole } from './permissions';
+import {
+  canCommentReview,
+  canCreateReviewList,
+  canCreateTask,
+  canDeleteFile,
+  canEditProject,
+  canManageMembers,
+  canReviewVersion,
+  canSubmitVersion,
+  canViewProject,
+  requireRole,
+  type ProjectPermissionContext,
+} from './permissions';
 
 const createResponse = () => {
   const state: { status?: number; body?: unknown } = {};
@@ -63,3 +75,102 @@ test('role middleware allows a matching authenticated role', () => {
   assert.equal(nextCalled, true);
 });
 
+
+const coreCapabilities = {
+  canViewProject,
+  canEditProject,
+  canManageMembers,
+  canCreateTask,
+  canSubmitVersion,
+  canReviewVersion,
+  canCreateReviewList,
+  canCommentReview,
+  canDeleteFile,
+};
+
+const evaluateCapabilities = (context: ProjectPermissionContext) =>
+  Object.fromEntries(
+    Object.entries(coreCapabilities).map(([name, capability]) => [name, capability(context)]),
+  );
+
+test('project capabilities allow system admin inside or outside any project', () => {
+  const expected = Object.fromEntries(Object.keys(coreCapabilities).map((name) => [name, true]));
+
+  assert.deepEqual(evaluateCapabilities({ systemRole: 'admin', projectRole: null }), expected);
+  assert.deepEqual(evaluateCapabilities({ systemRole: 'admin', projectRole: 'client' }), expected);
+});
+
+test('project capabilities allow project directors to manage workflow but not outside projects', () => {
+  assert.deepEqual(evaluateCapabilities({ systemRole: 'director', projectRole: 'director' }), {
+    canViewProject: true,
+    canEditProject: true,
+    canManageMembers: true,
+    canCreateTask: true,
+    canSubmitVersion: true,
+    canReviewVersion: true,
+    canCreateReviewList: true,
+    canCommentReview: true,
+    canDeleteFile: true,
+  });
+  assert.deepEqual(evaluateCapabilities({ systemRole: 'director', projectRole: null }), {
+    canViewProject: false,
+    canEditProject: false,
+    canManageMembers: false,
+    canCreateTask: false,
+    canSubmitVersion: false,
+    canReviewVersion: false,
+    canCreateReviewList: false,
+    canCommentReview: false,
+    canDeleteFile: false,
+  });
+});
+
+test('project capabilities allow creators to submit production work but not review or administer', () => {
+  assert.deepEqual(evaluateCapabilities({ systemRole: 'creator', projectRole: 'creator' }), {
+    canViewProject: true,
+    canEditProject: false,
+    canManageMembers: false,
+    canCreateTask: true,
+    canSubmitVersion: true,
+    canReviewVersion: false,
+    canCreateReviewList: false,
+    canCommentReview: true,
+    canDeleteFile: false,
+  });
+  assert.deepEqual(evaluateCapabilities({ systemRole: 'creator', projectRole: null }), {
+    canViewProject: false,
+    canEditProject: false,
+    canManageMembers: false,
+    canCreateTask: false,
+    canSubmitVersion: false,
+    canReviewVersion: false,
+    canCreateReviewList: false,
+    canCommentReview: false,
+    canDeleteFile: false,
+  });
+});
+
+test('project capabilities keep clients read/review focused and deny outside access', () => {
+  assert.deepEqual(evaluateCapabilities({ systemRole: 'client', projectRole: 'client' }), {
+    canViewProject: true,
+    canEditProject: false,
+    canManageMembers: false,
+    canCreateTask: false,
+    canSubmitVersion: false,
+    canReviewVersion: true,
+    canCreateReviewList: false,
+    canCommentReview: true,
+    canDeleteFile: false,
+  });
+  assert.deepEqual(evaluateCapabilities({ systemRole: 'client', projectRole: null }), {
+    canViewProject: false,
+    canEditProject: false,
+    canManageMembers: false,
+    canCreateTask: false,
+    canSubmitVersion: false,
+    canReviewVersion: false,
+    canCreateReviewList: false,
+    canCommentReview: false,
+    canDeleteFile: false,
+  });
+});

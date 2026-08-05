@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { pool } from './db';
 import { UUID_PATTERN, asyncHandler, readString } from './apiUtils';
+import { canCreateReviewList, canEditProject, canViewProject, getProjectPermissionContext } from './permissions';
 
 export const projectReviewListsRouter = Router({ mergeParams: true });
 export const reviewListsRouter = Router();
@@ -26,14 +27,16 @@ const requireProjectRouteAccess = async (
   projectId: string,
   userId: string,
   systemRole: string,
+  capability: 'view' | 'create' | 'edit' | 'delete' = 'view',
 ): Promise<{ ok: true } | { ok: false; status: number; error: string }> => {
   if (!UUID_PATTERN.test(projectId)) return { ok: false, status: 400, error: '项目 ID 无效。' };
-  void systemRole;
-  const membership = await pool.query(
-    'SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2',
-    [projectId, userId],
-  );
-  if (!membership.rowCount) return { ok: false, status: 403, error: '您不是该项目的成员。' };
+  const context = await getProjectPermissionContext(projectId, userId, systemRole);
+  const ok = capability === 'view'
+    ? canViewProject(context)
+    : capability === 'create'
+      ? canCreateReviewList(context)
+      : canEditProject(context);
+  if (!ok) return { ok: false, status: 403, error: '您没有操作该审核单的权限。' };
   return { ok: true };
 };
 
@@ -69,7 +72,7 @@ const fetchReviewList = async (id: string) => {
 
 projectReviewListsRouter.get('/', asyncHandler(async (request, response) => {
   const projectId = request.params.projectId;
-  const access = await requireProjectRouteAccess(projectId, request.authUser!.id, request.authUser!.role);
+  const access = await requireProjectRouteAccess(projectId, request.authUser!.id, request.authUser!.role, 'view');
   if (access.ok !== true) {
     response.status(access.status).json({ error: access.error });
     return;
@@ -84,7 +87,7 @@ projectReviewListsRouter.get('/', asyncHandler(async (request, response) => {
 
 projectReviewListsRouter.post('/', asyncHandler(async (request, response) => {
   const projectId = request.params.projectId;
-  const access = await requireProjectRouteAccess(projectId, request.authUser!.id, request.authUser!.role);
+  const access = await requireProjectRouteAccess(projectId, request.authUser!.id, request.authUser!.role, 'create');
   if (access.ok !== true) {
     response.status(access.status).json({ error: access.error });
     return;
@@ -138,7 +141,7 @@ reviewListsRouter.patch('/:id', asyncHandler(async (request, response) => {
     response.status(UUID_PATTERN.test(id) ? 404 : 400).json({ error: UUID_PATTERN.test(id) ? '审核单不存在。' : '审核单 ID 无效。' });
     return;
   }
-  const access = await requireProjectRouteAccess(projectId, request.authUser!.id, request.authUser!.role);
+  const access = await requireProjectRouteAccess(projectId, request.authUser!.id, request.authUser!.role, 'edit');
   if (access.ok !== true) {
     response.status(access.status).json({ error: access.error });
     return;
@@ -196,7 +199,7 @@ reviewListsRouter.delete('/:id', asyncHandler(async (request, response) => {
     response.status(UUID_PATTERN.test(id) ? 404 : 400).json({ error: UUID_PATTERN.test(id) ? '审核单不存在。' : '审核单 ID 无效。' });
     return;
   }
-  const access = await requireProjectRouteAccess(projectId, request.authUser!.id, request.authUser!.role);
+  const access = await requireProjectRouteAccess(projectId, request.authUser!.id, request.authUser!.role, 'delete');
   if (access.ok !== true) {
     response.status(access.status).json({ error: access.error });
     return;

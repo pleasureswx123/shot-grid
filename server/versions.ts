@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { pool } from './db';
-import { asyncHandler, readString, requireProjectAccess, requireProjectAccessFromRequest, UUID_PATTERN } from './apiUtils';
+import { asyncHandler, readString, requireProjectAccessFromRequest, UUID_PATTERN } from './apiUtils';
 import { validateEntityBelongsToProject } from './entityValidation';
 import { recordAuditLog } from './audit';
+import { canReviewVersion, canSubmitVersion, getProjectPermissionContext } from './permissions';
 
 export const versionsRouter = Router();
 
@@ -25,7 +26,7 @@ versionsRouter.post('/', asyncHandler(async (req, res) => {
   const task = await pool.query('SELECT project_id,entity_type,entity_id FROM tasks WHERE id=$1', [req.body?.taskId]);
   if (!task.rowCount) { res.status(404).json({ error: '任务不存在。' }); return; }
   const { project_id: projectId, entity_type: entityType, entity_id: entityId } = task.rows[0];
-  if (!await requireProjectAccess(projectId, req.authUser!.id, req.authUser!.role)) { res.status(403).json({ error: '您不是该项目的成员。' }); return; }
+  if (!canSubmitVersion(await getProjectPermissionContext(projectId, req.authUser!.id, req.authUser!.role))) { res.status(403).json({ error: '您没有提交版本的权限。' }); return; }
   const validationError = validateEntityBelongsToProject(entityType, entityId, projectId);
   if (validationError) { res.status(400).json({ error: validationError }); return; }
 
@@ -58,7 +59,7 @@ versionsRouter.post('/', asyncHandler(async (req, res) => {
 versionsRouter.patch('/:id/status', asyncHandler(async (req, res) => {
   const a = await pool.query('SELECT t.project_id,v.entity_type,v.entity_id,v.status FROM versions v JOIN tasks t ON t.id=v.task_id WHERE v.id=$1', [req.params.id]);
   if (!a.rowCount) { res.status(404).json({ error: '版本不存在。' }); return; }
-  if (!await requireProjectAccess(a.rows[0].project_id, req.authUser!.id, req.authUser!.role)) { res.status(403).json({ error: '您不是该项目的成员。' }); return; }
+  if (!canReviewVersion(await getProjectPermissionContext(a.rows[0].project_id, req.authUser!.id, req.authUser!.role))) { res.status(403).json({ error: '您没有审核版本的权限。' }); return; }
   const validationError = validateEntityBelongsToProject(a.rows[0].entity_type, a.rows[0].entity_id, a.rows[0].project_id);
   if (validationError) { res.status(400).json({ error: validationError }); return; }
   const r = await pool.query(`WITH updated AS (UPDATE versions SET status=coalesce($2,status) WHERE id=$1 RETURNING *) ${versionSelect.replace('FROM versions', 'FROM updated')}`, [req.params.id, req.body?.status ?? null]);
@@ -77,7 +78,7 @@ versionsRouter.patch('/:id/status', asyncHandler(async (req, res) => {
 versionsRouter.patch('/:id', asyncHandler(async (req, res) => {
   const a = await pool.query('SELECT t.project_id,v.entity_type,v.entity_id FROM versions v JOIN tasks t ON t.id=v.task_id WHERE v.id=$1', [req.params.id]);
   if (!a.rowCount) { res.status(404).json({ error: '版本不存在。' }); return; }
-  if (!await requireProjectAccess(a.rows[0].project_id, req.authUser!.id, req.authUser!.role)) { res.status(403).json({ error: '您不是该项目的成员。' }); return; }
+  if (!canReviewVersion(await getProjectPermissionContext(a.rows[0].project_id, req.authUser!.id, req.authUser!.role))) { res.status(403).json({ error: '您没有审核版本的权限。' }); return; }
   const validationError = validateEntityBelongsToProject(a.rows[0].entity_type, a.rows[0].entity_id, a.rows[0].project_id);
   if (validationError) { res.status(400).json({ error: validationError }); return; }
   const r = await pool.query(`WITH updated AS (UPDATE versions SET status=coalesce($2,status) WHERE id=$1 RETURNING *) ${versionSelect.replace('FROM versions', 'FROM updated')}`, [req.params.id, req.body?.status ?? null]);
