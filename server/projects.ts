@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import type { UserRole } from '../src/types';
+import { AUDIT_EVENTS, recordAuditLog } from './audit';
 import { pool } from './db';
 import { requireRole } from './permissions';
 import {
@@ -204,6 +205,68 @@ projectsRouter.post(
   }),
 );
 
+
+projectsRouter.patch('/:projectId', asyncHandler(async (request, response) => {
+  const projectId = request.params.projectId;
+  if (!UUID_PATTERN.test(projectId)) {
+    response.status(400).json({ error: '项目 ID 无效。' });
+    return;
+  }
+  if (!await canManageProject(projectId, request.authUser!.id, request.authUser!.role)) {
+    response.status(403).json({ error: '您没有修改该项目资料的权限。' });
+    return;
+  }
+  const before = await pool.query(
+    `SELECT name, project_type AS "type", aspect_ratio AS "aspectRatio",
+            total_duration_min AS "totalDurationMin", delivery_date AS "deliveryDate",
+            status, current_phase AS "currentPhase"
+       FROM projects WHERE id = $1`,
+    [projectId],
+  );
+  if (!before.rowCount) {
+    response.status(404).json({ error: '项目不存在。' });
+    return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `UPDATE projects SET
+         name = coalesce($2, name),
+         project_type = coalesce($3, project_type),
+         aspect_ratio = coalesce($4, aspect_ratio),
+         total_duration_min = coalesce($5, total_duration_min),
+         delivery_date = coalesce($6, delivery_date),
+         status = coalesce($7, status),
+         current_phase = coalesce($8, current_phase),
+         updated_at = now()
+       WHERE id = $1
+       RETURNING id, name, code, project_type AS "type", aspect_ratio AS "aspectRatio",
+                 total_duration_min::float8 AS "totalDurationMin", delivery_date AS "deliveryDate",
+                 director_id AS "directorId", status, current_phase AS "currentPhase",
+                 storage_key AS "storageKey"`,
+      [
+        projectId,
+        typeof request.body?.name === 'string' ? request.body.name.trim() : null,
+        typeof request.body?.type === 'string' ? request.body.type.trim() : null,
+        typeof request.body?.aspectRatio === 'string' ? request.body.aspectRatio.trim() : null,
+        request.body?.totalDurationMin ?? null,
+        request.body?.deliveryDate ?? null,
+        typeof request.body?.status === 'string' ? request.body.status.trim() : null,
+        typeof request.body?.currentPhase === 'string' ? request.body.currentPhase.trim() : null,
+      ],
+    );
+    await recordAuditLog(client, request, { action: AUDIT_EVENTS.PROJECT_UPDATE, projectId, entityType: 'project', entityId: projectId, details: { before: before.rows[0], changes: request.body, after: result.rows[0] } });
+    await client.query('COMMIT');
+    response.json({ project: result.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}));
+
 projectsRouter.post('/:projectId/storage/shots', asyncHandler(async (request, response) => {
   const projectId = request.params.projectId;
   const requestedShots = Array.isArray(request.body?.shots) ? request.body.shots : [];
@@ -354,7 +417,7 @@ projectsRouter.post('/:projectId/members', asyncHandler(async (request, response
     await client.query(
       `INSERT INTO audit_logs (
         actor_id, project_id, action, entity_type, entity_id, details, ip_address
-      ) VALUES ($1, $2, 'project.member.upsert', 'user', $3, $4::jsonb, $5)`,
+      ) VALUES ($1, $2, 'member.add', 'user', $3, $4::jsonb, $5)`,
       [
         request.authUser!.id,
         projectId,
@@ -422,7 +485,7 @@ projectsRouter.delete('/:projectId/members/:userId', asyncHandler(async (request
     await client.query(
       `INSERT INTO audit_logs (
         actor_id, project_id, action, entity_type, entity_id, ip_address
-      ) VALUES ($1, $2, 'project.member.remove', 'user', $3, $4)`,
+      ) VALUES ($1, $2, 'member.remove', 'user', $3, $4)`,
       [request.authUser!.id, projectId, userId, request.ip || null],
     );
     await client.query('COMMIT');

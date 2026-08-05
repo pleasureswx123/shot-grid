@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
+import { AUDIT_EVENTS, recordAuditLog } from './audit';
 import { pool } from './db';
 import { isEntityLockedForNonAdmin } from './workflow';
 import { asyncHandler, readNumber, readString, requireProjectAccessFromRequest, requireProjectWriteAccess, requireProjectWriteAccessFromRequest, UUID_PATTERN } from './apiUtils';
@@ -52,6 +53,7 @@ shotsRouter.post('/', asyncHandler(async (request, response) => {
     const shot = await client.query(`WITH inserted AS (INSERT INTO shots (id, project_id, scene_id, shot_code, duration_sec, shot_type, camera_movement, description, dialogue, current_stage, assignee_id, status, thumbnail_url) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'视频生成',$10,$11,$12) RETURNING *) ${selectShot} FROM inserted sh JOIN scenes sc ON sc.id = sh.scene_id LEFT JOIN shot_assets sa ON sa.shot_id = sh.id GROUP BY sh.id, sh.project_id, sh.scene_id, sc.scene_code, sh.shot_code, sh.duration_sec, sh.shot_type, sh.camera_movement, sh.description, sh.dialogue, sh.current_stage, sh.assignee_id, sh.status, sh.latest_version_id, sh.thumbnail_url`, [randomUUID(), projectId, scene.rows[0].id, shotCode, readNumber(request.body?.durationSec, 5), readString(request.body?.shotType, '中景'), readString(request.body?.cameraMovement, '固定镜头'), readString(request.body?.description, '新建镜头描述'), readString(request.body?.dialogue), readString(request.body?.assigneeId, request.authUser!.id), readString(request.body?.status, '未开始'), readString(request.body?.thumbnailUrl)]);
     const shotId = shot.rows[0].id;
     await client.query(`INSERT INTO tasks (id, project_id, title, entity_type, entity_id, pipeline_stage, assignee_id, status, priority, due_date, requirements) VALUES ($1,$2,$3,'shot',$4,'视频生成',$5,'制作中','中',now()::date + 2,$6)`, [randomUUID(), projectId, `${sceneCode} / ${shotCode} - 视频生成`, shotId, readString(request.body?.assigneeId, request.authUser!.id), `${sceneCode} / ${shotCode} 的视频生成阶段制作要求`]);
+    await recordAuditLog(client, request, { action: AUDIT_EVENTS.SHOT_CREATE, projectId, entityType: 'shot', entityId: shotId, details: { sceneCode, shotCode, assigneeId: readString(request.body?.assigneeId, request.authUser!.id), status: readString(request.body?.status, '未开始') } });
     await client.query('COMMIT'); response.status(201).json({ shot: shot.rows[0] });
   } catch (e:any) { await client.query('ROLLBACK'); if (e?.code === '23505') { response.status(409).json({ error: '镜头编号已经存在。' }); return; } throw e; } finally { client.release(); }
 }));
@@ -110,6 +112,7 @@ shotsRouter.post('/bulk', asyncHandler(async (request, response) => {
       );
     }
 
+    await recordAuditLog(client, request, { action: AUDIT_EVENTS.SHOT_BULK_IMPORT, projectId, entityType: 'shot', details: { count: importedShotIds.length, shotIds: importedShotIds } });
     await client.query('COMMIT');
     const scenesResult = await pool.query(`${selectScene} WHERE sc.project_id = $1 AND sc.scene_code = ANY($2::text[]) GROUP BY sc.id ORDER BY sc.sort_order ASC, sc.scene_code ASC`, [projectId, [...importedSceneCodes]]);
     const shotsResult = await pool.query(`${selectShot} FROM shots sh JOIN scenes sc ON sc.id = sh.scene_id LEFT JOIN shot_assets sa ON sa.shot_id = sh.id WHERE sh.id = ANY($1::uuid[]) GROUP BY sh.id, sc.scene_code ORDER BY sh.sort_order ASC, sh.shot_code ASC`, [importedShotIds]);
@@ -125,7 +128,7 @@ shotsRouter.post('/bulk', asyncHandler(async (request, response) => {
 
 shotsRouter.patch('/:id', asyncHandler(async (request, response) => {
   const id = request.params.id; if (!UUID_PATTERN.test(id)) { response.status(400).json({ error: '镜头 ID 无效。' }); return; }
-  const access = await pool.query('SELECT project_id,status FROM shots WHERE id=$1', [id]); if (!access.rowCount) { response.status(404).json({ error: '镜头不存在。' }); return; }
+  const access = await pool.query('SELECT project_id,status,assignee_id,description FROM shots WHERE id=$1', [id]); if (!access.rowCount) { response.status(404).json({ error: '镜头不存在。' }); return; }
   if (!await requireProjectWriteAccess(access.rows[0].project_id, request.authUser!.id, request.authUser!.role)) { response.status(403).json({ error: '您不是该项目的成员。' }); return; }
   if (isEntityLockedForNonAdmin(access.rows[0].status) && request.authUser!.role !== 'admin') { response.status(403).json({ error: '最终版已锁定，仅管理员可继续修改。' }); return; }
   let sceneId: string | null = null;
@@ -136,6 +139,14 @@ shotsRouter.patch('/:id', asyncHandler(async (request, response) => {
     sceneId = scene.rows[0].id;
   }
   await pool.query(`UPDATE shots SET scene_id=coalesce($2,scene_id), assignee_id=coalesce($3,assignee_id), status=coalesce($4,status), description=coalesce($5,description) WHERE id=$1`, [id, sceneId, request.body?.assigneeId ?? null, request.body?.status ?? null, request.body?.description ?? null]);
+  const nextAssetIds = Array.isArray(request.body?.assetIds) ? request.body.assetIds.filter((value: unknown) => typeof value === 'string' && UUID_PATTERN.test(value)) : null;
+  if (nextAssetIds) {
+    const beforeAssets = await pool.query('SELECT asset_id FROM shot_assets WHERE shot_id=$1 ORDER BY asset_id', [id]);
+    await pool.query('DELETE FROM shot_assets WHERE shot_id=$1', [id]);
+    for (const assetId of nextAssetIds) await pool.query('INSERT INTO shot_assets (shot_id, asset_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [id, assetId]);
+    await recordAuditLog(pool, request, { action: AUDIT_EVENTS.SHOT_ASSETS_CHANGE, projectId: access.rows[0].project_id, entityType: 'shot', entityId: id, details: { from: beforeAssets.rows.map(row => row.asset_id), to: nextAssetIds } });
+  }
+  await recordAuditLog(pool, request, { action: AUDIT_EVENTS.SHOT_UPDATE, projectId: access.rows[0].project_id, entityType: 'shot', entityId: id, details: { changes: request.body } });
   const result = await pool.query(`${selectShot} FROM shots sh JOIN scenes sc ON sc.id=sh.scene_id LEFT JOIN shot_assets sa ON sa.shot_id=sh.id WHERE sh.id=$1 GROUP BY sh.id, sc.scene_code`, [id]); response.json({ shot: result.rows[0] });
 }));
-shotsRouter.delete('/:id', asyncHandler(async (request, response) => { const id=request.params.id; const access=await pool.query('SELECT project_id,status FROM shots WHERE id=$1',[id]); if(!access.rowCount){response.status(404).json({error:'镜头不存在。'});return;} if(!await requireProjectWriteAccess(access.rows[0].project_id,request.authUser!.id,request.authUser!.role)){response.status(403).json({error:'您不是该项目的成员。'});return;} if(isEntityLockedForNonAdmin(access.rows[0].status)&&request.authUser!.role!=='admin'){response.status(403).json({error:'最终版已锁定，仅管理员可继续修改。'});return;} await pool.query('DELETE FROM shots WHERE id=$1',[id]); response.status(204).end(); }));
+shotsRouter.delete('/:id', asyncHandler(async (request, response) => { const id=request.params.id; const access=await pool.query('SELECT project_id,status,shot_code FROM shots WHERE id=$1',[id]); if(!access.rowCount){response.status(404).json({error:'镜头不存在。'});return;} if(!await requireProjectWriteAccess(access.rows[0].project_id,request.authUser!.id,request.authUser!.role)){response.status(403).json({error:'您不是该项目的成员。'});return;} if(isEntityLockedForNonAdmin(access.rows[0].status)&&request.authUser!.role!=='admin'){response.status(403).json({error:'最终版已锁定，仅管理员可继续修改。'});return;} const client=await pool.connect(); try{await client.query('BEGIN'); await client.query('DELETE FROM shots WHERE id=$1',[id]); await recordAuditLog(client,request,{action:AUDIT_EVENTS.SHOT_DELETE,projectId:access.rows[0].project_id,entityType:'shot',entityId:id,details:{shotCode:access.rows[0].shot_code,status:access.rows[0].status}}); await client.query('COMMIT'); response.status(204).end();}catch(e){await client.query('ROLLBACK'); throw e;}finally{client.release();} }));

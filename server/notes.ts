@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
+import { AUDIT_EVENTS, recordAuditLog } from './audit';
 import { pool } from './db';
 import { UUID_PATTERN, asyncHandler, readNumber, readString } from './apiUtils';
 import { canCommentReview, canReviewVersion, canSubmitVersion, canViewProject, getProjectPermissionContext } from './permissions';
@@ -124,6 +125,7 @@ versionNotesRouter.post('/', asyncHandler(async (request, response) => {
       typeof request.body?.replyContent === 'string' ? new Date() : null,
     ],
   );
+  await recordAuditLog(pool, request, { action: AUDIT_EVENTS.NOTE_CREATE, projectId, entityType: 'note', entityId: id, details: { versionId, isMandatory: request.body?.isMandatory !== false, status: readString(request.body?.status, '待处理') } });
   response.status(201).json({ note: await fetchNote(id) });
 }));
 
@@ -147,6 +149,7 @@ notesRouter.patch('/:noteId', asyncHandler(async (request, response) => {
     return;
   }
 
+  const before = await fetchNote(noteId);
   await pool.query(
     `UPDATE notes
      SET content = COALESCE($2, content),
@@ -170,5 +173,7 @@ notesRouter.patch('/:noteId', asyncHandler(async (request, response) => {
       typeof request.body?.replyContent === 'string' ? readString(request.body.replyContent) : null,
     ],
   );
-  response.json({ note: await fetchNote(noteId) });
+  const note = await fetchNote(noteId);
+  await recordAuditLog(pool, request, { action: changesStatus ? AUDIT_EVENTS.NOTE_RESOLVE : changesReply ? AUDIT_EVENTS.NOTE_REPLY : AUDIT_EVENTS.NOTE_UPDATE, projectId, entityType: 'note', entityId: noteId, details: { versionId: note.versionId, before, changes: request.body, after: note } });
+  response.json({ note });
 }));

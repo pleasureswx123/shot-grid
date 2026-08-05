@@ -3,7 +3,7 @@ import { Response, Router } from 'express';
 import { pool } from './db';
 import { asyncHandler, readString, requireProjectAccessFromRequest, UUID_PATTERN } from './apiUtils';
 import { validateEntityBelongsToProject } from './entityValidation';
-import { recordAuditLog } from './audit';
+import { AUDIT_EVENTS, recordAuditLog } from './audit';
 import { canReviewVersion, canSubmitVersion, getProjectPermissionContext } from './permissions';
 import { applyVersionStatusEffects, assertVersionStatusTransition, isEntityLockedForNonAdmin } from './workflow';
 
@@ -68,6 +68,7 @@ versionsRouter.post('/', asyncHandler(async (req, res) => {
     await client.query('UPDATE tasks SET latest_version_id=$1,status=$2 WHERE id=$3', [id, '待审核', req.body.taskId]);
     if (entityType !== 'project') await client.query(`UPDATE ${entityType === 'shot' ? 'shots' : 'assets'} SET latest_version_id=$1,status=$2,thumbnail_url=coalesce(nullif($3,''),thumbnail_url) WHERE id=$4`, [id, '审核中', readString(req.body?.thumbnailUrl), entityId]);
     const r = await client.query(`${versionSelect} WHERE id=$1`, [id]);
+    await recordAuditLog(client, req, { action: AUDIT_EVENTS.VERSION_SUBMIT, projectId, entityType: 'version', entityId: id, details: { taskId: req.body.taskId, entityType, entityId, versionNumber: readString(req.body?.versionNumber, 'V001'), fileId, status: readString(req.body?.status, '待审核') } });
     await client.query('COMMIT');
     res.status(201).json({ version: r.rows[0] });
   } catch (error) {
@@ -106,7 +107,7 @@ versionsRouter.patch('/:id/status', asyncHandler(async (req, res) => {
     if (nextStatus !== a.rows[0].status) {
       await applyVersionStatusEffects(client, { id: req.params.id, task_id: a.rows[0].task_id, entity_type: a.rows[0].entity_type, entity_id: a.rows[0].entity_id }, nextStatus);
       await recordAuditLog(client, req, {
-        action: 'review.status.change',
+        action: nextStatus === '最终版' ? AUDIT_EVENTS.VERSION_FINAL_SET : AUDIT_EVENTS.REVIEW_STATUS_CHANGE,
         projectId: a.rows[0].project_id,
         entityType: 'version',
         entityId: req.params.id,
@@ -141,6 +142,17 @@ versionsRouter.patch('/:id', asyncHandler(async (req, res) => {
       return;
     }
   }
-  const r = await pool.query(`WITH updated AS (UPDATE versions SET status=$2 WHERE id=$1 RETURNING *) ${versionSelect.replace('FROM versions', 'FROM updated')}`, [req.params.id, nextStatus]);
-  res.json({ version: r.rows[0] });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query(`WITH updated AS (UPDATE versions SET status=$2 WHERE id=$1 RETURNING *) ${versionSelect.replace('FROM versions', 'FROM updated')}`, [req.params.id, nextStatus]);
+    if (nextStatus !== a.rows[0].status) await recordAuditLog(client, req, { action: nextStatus === '最终版' ? AUDIT_EVENTS.VERSION_FINAL_SET : AUDIT_EVENTS.VERSION_STATUS_CHANGE, projectId: a.rows[0].project_id, entityType: 'version', entityId: req.params.id, details: { from: a.rows[0].status, to: nextStatus } });
+    await client.query('COMMIT');
+    res.json({ version: r.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }));

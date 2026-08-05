@@ -3,10 +3,11 @@ import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
 import {
   Clapperboard, User, Shield, Video, Layers, Plus,
-  Sparkles, FolderOpen, CheckCircle, ChevronDown, LogOut, Building2, Users
+  Sparkles, FolderOpen, CheckCircle, ChevronDown, LogOut, Building2, Users, FileClock
 } from 'lucide-react';
 import { UserRole } from '../types';
 import { UserManagementModal } from './admin/UserManagementModal';
+import { AuditLogsModal } from './admin/AuditLogsModal';
 import { useWorkspace } from '../context/WorkspaceContext';
 import { NewProjectModal } from './project/NewProjectModal';
 
@@ -29,6 +30,7 @@ export const Header: React.FC<HeaderProps> = ({
   const [showRoleDropdown, setShowRoleDropdown] = useState(false);
   const [showAddDropdown, setShowAddDropdown] = useState(false);
   const [showUserManagement, setShowUserManagement] = useState(false);
+  const [showAuditLogs, setShowAuditLogs] = useState(false);
   const [showNewProject, setShowNewProject] = useState(false);
 
   const getRoleBadge = (role: UserRole) => {
@@ -195,6 +197,18 @@ export const Header: React.FC<HeaderProps> = ({
                   <span>员工账号管理</span>
                 </button>
               )}
+              {currentUser.role === 'admin' && (
+                <button
+                  onClick={() => {
+                    setShowRoleDropdown(false);
+                    setShowAuditLogs(true);
+                  }}
+                  className="w-full px-3 py-2.5 text-left text-xs text-slate-200 hover:bg-slate-700 flex items-center space-x-2 transition"
+                >
+                  <FileClock className="w-4 h-4 text-cyan-400" />
+                  <span>审计日志</span>
+                </button>
+              )}
               <button
                 onClick={() => {
                   setShowRoleDropdown(false);
@@ -215,6 +229,9 @@ export const Header: React.FC<HeaderProps> = ({
       )}
       {showNewProject && (
         <NewProjectModal onClose={() => setShowNewProject(false)} />
+      )}
+      {showAuditLogs && (
+        <AuditLogsModal onClose={() => setShowAuditLogs(false)} />
       )}
     </header>
   );

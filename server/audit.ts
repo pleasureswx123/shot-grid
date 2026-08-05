@@ -2,6 +2,41 @@ import type { Request, RequestHandler } from 'express';
 import type { Pool, PoolClient } from 'pg';
 import { pool } from './db';
 
+export const AUDIT_EVENTS = {
+  PROJECT_CREATE: 'project.create',
+  PROJECT_UPDATE: 'project.update',
+  MEMBER_ADD: 'member.add',
+  MEMBER_REMOVE: 'member.remove',
+  SHOT_CREATE: 'shot.create',
+  SHOT_BULK_IMPORT: 'shot.bulk.import',
+  SHOT_UPDATE: 'shot.update',
+  SHOT_DELETE: 'shot.delete',
+  SHOT_ASSETS_CHANGE: 'shot.assets.change',
+  ASSET_CREATE: 'asset.create',
+  ASSET_UPDATE: 'asset.update',
+  ASSET_DELETE: 'asset.delete',
+  ASSET_APPROVED_VERSION_CHANGE: 'asset.approved_version.change',
+  TASK_CREATE: 'task.create',
+  TASK_STATUS_CHANGE: 'task.status.change',
+  TASK_ASSIGNEE_CHANGE: 'task.assignee.change',
+  TASK_DUE_DATE_CHANGE: 'task.dueDate.change',
+  VERSION_SUBMIT: 'version.submit',
+  VERSION_STATUS_CHANGE: 'version.status.change',
+  VERSION_FINAL_SET: 'version.final.set',
+  REVIEW_STATUS_CHANGE: 'review.status.change',
+  NOTE_CREATE: 'note.create',
+  NOTE_UPDATE: 'note.update',
+  NOTE_RESOLVE: 'note.resolve',
+  NOTE_REPLY: 'note.reply',
+  FILE_UPLOAD: 'file.upload',
+  FILE_NAS_REGISTER: 'file.nas.register',
+  FILE_DELETE: 'file.delete',
+  FILE_RESTORE: 'file.restore',
+  FILE_DOWNLOAD: 'file.download',
+} as const;
+
+export type AuditEvent = typeof AUDIT_EVENTS[keyof typeof AUDIT_EVENTS];
+
 export const getClientIp = (request: Request): string | null =>
   request.ip || request.socket.remoteAddress || null;
 
