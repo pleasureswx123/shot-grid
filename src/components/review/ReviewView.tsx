@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { ApiError } from '../../utils/apiClient';
 import { useApp } from '../../context/AppContext';
 import {
@@ -6,8 +6,35 @@ import {
   Sparkles, Layers, Sliders, ChevronRight, Plus, Eye,
   Copy, FileVideo, MessageSquare, Archive
 } from 'lucide-react';
-import type { NoteAnnotation, VersionStatus } from '../../types';
+import type { NoteAnnotation, Version, VersionStatus } from '../../types';
 import { CanvasAnnotator } from '../common/CanvasAnnotator';
+
+
+interface ReviewMediaPreviewProps {
+  version: Version;
+  alt: string;
+}
+
+const ReviewMediaPreview: React.FC<ReviewMediaPreviewProps> = ({ version, alt }) => {
+  if (version.fileType === 'video') {
+    return (
+      <video
+        src={version.fileUrl}
+        poster={version.thumbnailUrl}
+        controls
+        className="w-full h-full object-contain"
+      />
+    );
+  }
+
+  return (
+    <img
+      src={version.fileUrl || version.thumbnailUrl}
+      alt={alt}
+      className="w-full h-full object-contain"
+    />
+  );
+};
 
 export const ReviewView: React.FC = () => {
   const {
@@ -33,9 +60,33 @@ export const ReviewView: React.FC = () => {
   // Compare mode: 'single' | 'ab_compare'
   const [reviewMode, setReviewMode] = useState<'single' | 'ab_compare'>('single');
   const [compareVersionId, setCompareVersionId] = useState<string>(
-    versions.find(v => v.entityId === activeVersion?.entityId && v.id !== activeVersion?.id)?.id || ''
+    versions.find(v => (
+      v.entityType === activeVersion?.entityType &&
+      v.entityId === activeVersion?.entityId &&
+      v.id !== activeVersion?.id
+    ))?.id || ''
   );
-  const compareVersion = versions.find(v => v.id === compareVersionId);
+  const compareVersionOptions = useMemo(() => versions.filter(v => (
+    v.entityType === activeVersion?.entityType &&
+    v.entityId === activeVersion?.entityId &&
+    v.id !== activeVersion?.id
+  )), [activeVersion?.entityId, activeVersion?.entityType, activeVersion?.id, versions]);
+  const compareVersion = compareVersionOptions.find(v => v.id === compareVersionId);
+
+  useEffect(() => {
+    if (!activeVersion) {
+      setCompareVersionId('');
+      return;
+    }
+
+    const currentCompareVersion = compareVersionOptions.find(v => v.id === compareVersionId);
+    if (!currentCompareVersion) {
+      const nextCompareVersionId = compareVersionOptions[0]?.id || '';
+      if (nextCompareVersionId !== compareVersionId) {
+        setCompareVersionId(nextCompareVersionId);
+      }
+    }
+  }, [activeVersion, compareVersionId, compareVersionOptions]);
 
   // Video playback
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -320,7 +371,7 @@ export const ReviewView: React.FC = () => {
                   <span>{activeVersion?.aiParams?.modelName}</span>
                 </div>
                 <div className="flex-1 relative rounded overflow-hidden">
-                  <img src={activeVersion?.fileUrl || activeVersion?.thumbnailUrl} alt="A" className="w-full h-full object-contain" />
+                  <ReviewMediaPreview version={activeVersion} alt="A" />
                 </div>
               </div>
 
@@ -333,7 +384,7 @@ export const ReviewView: React.FC = () => {
                     onChange={e => setCompareVersionId(e.target.value)}
                     className="bg-slate-800 border border-slate-700 text-[10px] text-slate-200 rounded px-2 py-0.5"
                   >
-                    {versions.filter(v => v.id !== activeVersion?.id).map(v => (
+                    {compareVersionOptions.map(v => (
                       <option key={v.id} value={v.id}>
                         {v.entityId.toUpperCase()} {v.versionNumber} ({v.createdAt})
                       </option>
@@ -342,7 +393,7 @@ export const ReviewView: React.FC = () => {
                 </div>
                 <div className="flex-1 relative rounded overflow-hidden">
                   {compareVersion ? (
-                    <img src={compareVersion.fileUrl || compareVersion.thumbnailUrl} alt="B" className="w-full h-full object-contain" />
+                    <ReviewMediaPreview version={compareVersion} alt="B" />
                   ) : (
                     <div className="text-center py-20 text-slate-600 text-xs">请选择对比的历史版本</div>
                   )}
