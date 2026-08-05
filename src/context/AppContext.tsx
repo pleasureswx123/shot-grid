@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useCallback, useContext, useState, useEffect } from 'react';
 import {
   Project, User, Scene, Shot, Asset, Task, Version, Note, ReviewList, ProjectFile,
   UserRole, ShotStatus, AssetStatus, TaskStatus, VersionStatus, AIGenerationParams, AssetCategory,
@@ -58,10 +58,11 @@ interface AppContextType {
   updateTaskStatus: (taskId: string, status: TaskStatus) => void;
   createReviewList: (title: string, date: string, versionIds: string[], description?: string) => Promise<void>;
   importShotsFromData: (importedShots: Array<{ sceneCode: string; shotCode: string; description: string; durationSec: number; shotType: string; cameraMovement: string; assetNames?: string }>) => Promise<void>;
-  sendChatMessage: (msg: Omit<ChatMessage, 'id' | 'createdAt'>) => void;
-  updateChatMessageMedia: (messageId: string, editedMediaUrl: string) => void;
-  toggleLikeMessage: (messageId: string, userId: string) => void;
-  createDepartmentChannel: (channel: Omit<DepartmentChannel, 'id' | 'unreadCount'>) => void;
+  sendChatMessage: (msg: Omit<ChatMessage, 'id' | 'createdAt'>) => Promise<void>;
+  updateChatMessageMedia: (messageId: string, editedMediaUrl: string) => Promise<void>;
+  toggleLikeMessage: (messageId: string, userId: string) => Promise<void>;
+  createDepartmentChannel: (channel: Omit<DepartmentChannel, 'id' | 'unreadCount'>) => Promise<DepartmentChannel>;
+  refreshChatMessages: (channelId?: string, options?: { before?: string; append?: boolean }) => Promise<void>;
   resetToDefaultData: () => void;
 }
 
@@ -563,6 +564,28 @@ export const AppProvider: React.FC<AppProviderProps> = ({
     ]);
   }, [currentUser, initialProject.code, initialUsers]);
 
+  const refreshChatMessages = useCallback(async (channelId?: string, options: { before?: string; append?: boolean } = {}): Promise<void> => {
+    const params = new URLSearchParams();
+    if (channelId) {
+      params.set('channelId', channelId);
+    } else {
+      params.set('projectId', project.id);
+    }
+    params.set('limit', '50');
+    if (options.before) params.set('before', options.before);
+
+    const body = await apiRequest<{ chatMessages: ChatMessage[] }>(`/api/chat/messages?${params.toString()}`);
+    setChatMessages(prev => {
+      if (!options.append) {
+        const channelFilter = channelId ? (message: ChatMessage) => message.channelId !== channelId : () => false;
+        return [...prev.filter(channelFilter), ...body.chatMessages];
+      }
+
+      const existingIds = new Set(prev.map(message => message.id));
+      return [...body.chatMessages.filter(message => !existingIds.has(message.id)), ...prev];
+    });
+  }, [project.id]);
+
   const refreshProjectData = async (): Promise<void> => {
     const query = `projectId=${encodeURIComponent(project.id)}`;
     const [sceneBody, shotBody, assetBody, taskBody, versionBody, reviewBody, channelBody, messageBody] = await Promise.all([
@@ -573,7 +596,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
       apiRequest<{ versions: Version[] }>(`/api/projects/${project.id}/versions`),
       apiRequest<{ reviewLists: ReviewList[] }>(`/api/projects/${project.id}/review-lists`),
       apiRequest<{ channels: DepartmentChannel[] }>(`/api/chat/channels?${query}`),
-      apiRequest<{ chatMessages: ChatMessage[] }>(`/api/chat/messages?${query}`),
+      apiRequest<{ chatMessages: ChatMessage[] }>(`/api/chat/messages?${query}&limit=50`),
     ]);
     const noteBodies = await Promise.all(versionBody.versions.map(version =>
       apiRequest<{ notes: Note[] }>(`/api/versions/${version.id}/notes`)
@@ -971,31 +994,39 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   };
 
 
-  const updateChatMessageMedia = (messageId: string, editedMediaUrl: string) => {
+  const updateChatMessageMedia = async (messageId: string, editedMediaUrl: string) => {
+    await apiRequest<void>(`/api/chat/messages/${messageId}/media`, {
+      method: 'PATCH',
+      body: JSON.stringify({ editedMediaUrl }),
+    });
     setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, editedMediaUrl } : m));
   };
 
-  const toggleLikeMessage = (messageId: string, userId: string) => {
+  const toggleLikeMessage = async (messageId: string, userId: string) => {
+    const message = chatMessages.find(item => item.id === messageId);
+    const liked = Boolean(message?.likes?.includes(userId));
+    await apiRequest<void>(`/api/chat/messages/${messageId}/likes`, {
+      method: liked ? 'DELETE' : 'POST',
+    });
     setChatMessages(prev => prev.map(m => {
       if (m.id === messageId) {
         const likes = m.likes || [];
-        const exists = likes.includes(userId);
         return {
           ...m,
-          likes: exists ? likes.filter(id => id !== userId) : [...likes, userId]
+          likes: liked ? likes.filter(id => id !== userId) : [...likes, userId]
         };
       }
       return m;
     }));
   };
 
-  const createDepartmentChannel = (channelData: Omit<DepartmentChannel, 'id' | 'unreadCount'>) => {
-    const newChan: DepartmentChannel = {
-      ...channelData,
-      id: `c_${Date.now().toString(36)}`,
-      unreadCount: 0
-    };
-    setChannels(prev => [...prev, newChan]);
+  const createDepartmentChannel = async (channelData: Omit<DepartmentChannel, 'id' | 'unreadCount'>) => {
+    const body = await apiRequest<{ channel: DepartmentChannel }>(`/api/chat/channels?projectId=${encodeURIComponent(project.id)}`, {
+      method: 'POST',
+      body: JSON.stringify({ ...channelData, projectId: project.id }),
+    });
+    setChannels(prev => [...prev, body.channel]);
+    return body.channel;
   };
 
   // Reset to default sample state
@@ -1058,6 +1089,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
         updateChatMessageMedia,
         toggleLikeMessage,
         createDepartmentChannel,
+        refreshChatMessages,
         resetToDefaultData
       }}
     >
