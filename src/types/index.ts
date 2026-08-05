@@ -187,6 +187,15 @@ export interface Project {
   storageDirectories?: string[];
 }
 
+export type ReviewListStatus = '草稿' | '待审核' | '审核中' | '已完成' | '已归档';
+
+export interface ReviewListParticipant {
+  userId: string;
+  role: '审核人' | '客户' | '观察者';
+  hasCompleted: boolean;
+  completedAt?: string | null;
+}
+
 export interface ReviewList {
   id: string;
   projectId: string;
@@ -194,6 +203,14 @@ export interface ReviewList {
   date: string;
   versionIds: string[];
   description?: string;
+  status: ReviewListStatus;
+  roundNumber: number;
+  dueAt?: string | null;
+  createdBy?: string | null;
+  submittedBy?: string | null;
+  submittedAt?: string | null;
+  completedAt?: string | null;
+  participants: ReviewListParticipant[];
   createdAt: string;
 }
 

@@ -4,7 +4,7 @@ import { useApp } from '../../context/AppContext';
 import {
   Play, Pause, Clock, CheckCircle2, XCircle, RotateCcw,
   Sparkles, Layers, Sliders, ChevronRight, Plus, Eye,
-  Copy, FileVideo, MessageSquare
+  Copy, FileVideo, MessageSquare, Archive
 } from 'lucide-react';
 import type { NoteAnnotation, VersionStatus } from '../../types';
 import { CanvasAnnotator } from '../common/CanvasAnnotator';
@@ -12,11 +12,15 @@ import { CanvasAnnotator } from '../common/CanvasAnnotator';
 export const ReviewView: React.FC = () => {
   const {
     currentUser, reviewLists, selectedReviewListId, setSelectedReviewListId,
-    versions, shots, notes, updateVersionStatus, addNote, createReviewList, apiStatus
+    versions, shots, notes, users, updateVersionStatus, addNote, createReviewList, submitReviewList, completeReviewList, archiveReviewList, completeReviewListParticipant, apiStatus
   } = useApp();
 
   const currentPlaylist = reviewLists.find(rl => rl.id === selectedReviewListId) || reviewLists[0];
   const playlistVersions = versions.filter(v => currentPlaylist?.versionIds.includes(v.id)) ;
+  const canCompletePlaylist = Boolean(currentPlaylist && currentPlaylist.versionIds.every(versionId => {
+    const version = versions.find(item => item.id === versionId);
+    return version?.status === '已通过' || version?.status === '最终版';
+  }) && currentPlaylist.participants.every(participant => participant.role === '观察者' || participant.hasCompleted));
   const displayVersions = playlistVersions.length > 0 ? playlistVersions : versions.slice(0, 4);
 
   // Active version being reviewed
@@ -49,6 +53,7 @@ export const ReviewView: React.FC = () => {
   // New Playlist Modal state
   const [showNewPlaylistModal, setShowNewPlaylistModal] = useState(false);
   const [newPlaylistTitle, setNewPlaylistTitle] = useState('');
+  const [newPlaylistDueAt, setNewPlaylistDueAt] = useState('');
 
   const togglePlay = () => {
     if (videoRef.current) {
@@ -113,9 +118,16 @@ export const ReviewView: React.FC = () => {
       newPlaylistTitle,
       new Date().toISOString().split('T')[0],
       allPendingVersionIds.length > 0 ? allPendingVersionIds : [activeVersion.id],
-      '新建导演在线集中审核单'
+      '新建导演在线集中审核单',
+      {
+        dueAt: newPlaylistDueAt ? new Date(newPlaylistDueAt).toISOString() : null,
+        participants: [
+          { userId: currentUser.id, role: currentUser.role === 'client' ? '客户' : '审核人', hasCompleted: false },
+        ],
+      }
     );
     setNewPlaylistTitle('');
+    setNewPlaylistDueAt('');
     setShowNewPlaylistModal(false);
   };
 
@@ -349,6 +361,46 @@ export const ReviewView: React.FC = () => {
             </p>
           </div>
 
+
+
+          {currentPlaylist && (
+            <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-800/40 p-3 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-white">审核单流程</span>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${
+                  currentPlaylist.status === '已完成' ? 'bg-emerald-500/20 text-emerald-300' :
+                  currentPlaylist.status === '已归档' ? 'bg-slate-700 text-slate-300' :
+                  currentPlaylist.status === '草稿' ? 'bg-amber-500/20 text-amber-300' :
+                  'bg-indigo-500/20 text-indigo-300'
+                }`}>{currentPlaylist.status}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-400">
+                <div>轮次：<strong className="text-slate-200">第 {currentPlaylist.roundNumber || 1} 轮</strong></div>
+                <div>截止：<strong className="text-slate-200">{currentPlaylist.dueAt ? new Date(currentPlaylist.dueAt).toLocaleDateString() : '未设置'}</strong></div>
+              </div>
+              <div className="space-y-1">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">参与人</span>
+                {(currentPlaylist.participants || []).length ? currentPlaylist.participants.map(participant => {
+                  const user = users.find(item => item.id === participant.userId);
+                  return (
+                    <div key={participant.userId} className="flex items-center justify-between rounded-lg bg-slate-900/70 px-2 py-1.5">
+                      <span className="text-slate-300">{user?.name || participant.userId.slice(0, 8)} · {participant.role}</span>
+                      <span className={participant.hasCompleted ? 'text-emerald-300' : 'text-amber-300'}>{participant.hasCompleted ? '已完成' : '待完成'}</span>
+                    </div>
+                  );
+                }) : <p className="text-[11px] text-slate-500">尚未添加参与人。</p>}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {currentPlaylist.status === '草稿' && (
+                  <button onClick={() => submitReviewList(currentPlaylist.id)} className="rounded-lg bg-indigo-600 px-3 py-2 font-bold text-white hover:bg-indigo-500">提交审核</button>
+                )}
+                <button onClick={() => completeReviewListParticipant(currentPlaylist.id, currentUser.id)} className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 font-semibold text-slate-200 hover:bg-slate-800">我已完成</button>
+                <button disabled={!canCompletePlaylist} onClick={() => completeReviewList(currentPlaylist.id)} className="rounded-lg bg-emerald-600 px-3 py-2 font-bold text-white disabled:cursor-not-allowed disabled:opacity-40">完成审核单</button>
+                <button onClick={() => archiveReviewList(currentPlaylist.id)} className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 font-semibold text-slate-300 hover:bg-slate-800 flex items-center justify-center gap-1"><Archive className="h-3.5 w-3.5" />归档</button>
+              </div>
+            </div>
+          )}
+
           {/* New Note Form */}
           <div className="space-y-2 bg-slate-800/40 p-3 rounded-xl border border-slate-800">
             <textarea
@@ -477,6 +529,12 @@ export const ReviewView: React.FC = () => {
               placeholder="例如：7月28日导演全片视频精审"
               value={newPlaylistTitle}
               onChange={e => setNewPlaylistTitle(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+            />
+            <input
+              type="datetime-local"
+              value={newPlaylistDueAt}
+              onChange={e => setNewPlaylistDueAt(e.target.value)}
               className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
             />
             <div className="flex justify-end space-x-2 pt-2">

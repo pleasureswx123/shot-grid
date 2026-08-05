@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useState, useEffect } from 'react';
 import {
-  Project, User, Scene, Shot, Asset, Task, Version, Note, ReviewList, ProjectFile,
+  Project, User, Scene, Shot, Asset, Task, Version, Note, ReviewList, ReviewListParticipant, ProjectFile,
   UserRole, ShotStatus, AssetStatus, TaskStatus, VersionStatus, AIGenerationParams, AssetCategory,
   DepartmentChannel, ChatMessage, ImportedAssetData
 } from '../types';
@@ -65,7 +65,11 @@ interface AppContextType {
   updateVersionStatus: (versionId: string, status: VersionStatus) => Promise<void>;
   addNote: (noteData: Omit<Note, 'id' | 'createdAt'>) => Promise<void>;
   updateTaskStatus: (taskId: string, status: TaskStatus) => Promise<void>;
-  createReviewList: (title: string, date: string, versionIds: string[], description?: string) => Promise<void>;
+  createReviewList: (title: string, date: string, versionIds: string[], description?: string, options?: { roundNumber?: number; dueAt?: string | null; participants?: ReviewListParticipant[] }) => Promise<void>;
+  submitReviewList: (id: string) => Promise<void>;
+  completeReviewList: (id: string) => Promise<void>;
+  archiveReviewList: (id: string) => Promise<void>;
+  completeReviewListParticipant: (id: string, userId: string) => Promise<void>;
   importShotsFromData: (importedShots: Array<{ sceneCode: string; shotCode: string; description: string; durationSec: number; shotType: string; cameraMovement: string; assetNames?: string }>) => Promise<void>;
   sendChatMessage: (msg: Omit<ChatMessage, 'id' | 'createdAt'>) => Promise<void>;
   updateChatMessageMedia: (messageId: string, editedMediaUrl: string) => Promise<void>;
@@ -859,19 +863,31 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   };
 
   // Create Review List (Playlist)
-  const createReviewList = async (title: string, date: string, versionIds: string[], description?: string) => {
+  const runReviewListAction = async (action: () => Promise<{ reviewList: ReviewList }>, errorMessage: string) => {
     setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
     try {
-      const body = await reviewsApi.createReviewList(project.id, { title, date, versionIds, description });
+      const body = await action();
       await refreshProjectData();
       setSelectedReviewListId(body.reviewList.id);
     } catch (error) {
-      reportApiError(error, '创建审核单失败。');
+      reportApiError(error, errorMessage);
       throw error;
     } finally {
       setApiStatus(previous => ({ ...previous, isSaving: false }));
     }
   };
+
+  const createReviewList = async (title: string, date: string, versionIds: string[], description?: string, options: { roundNumber?: number; dueAt?: string | null; participants?: ReviewListParticipant[] } = {}) => {
+    await runReviewListAction(
+      () => reviewsApi.createReviewList(project.id, { title, date, versionIds, description, ...options }),
+      '创建审核单失败。',
+    );
+  };
+
+  const submitReviewList = (id: string) => runReviewListAction(() => reviewsApi.submitReviewList(id), '提交审核单失败。');
+  const completeReviewList = (id: string) => runReviewListAction(() => reviewsApi.completeReviewList(id), '完成审核单失败。');
+  const archiveReviewList = (id: string) => runReviewListAction(() => reviewsApi.archiveReviewList(id), '归档审核单失败。');
+  const completeReviewListParticipant = (id: string, userId: string) => runReviewListAction(() => reviewsApi.completeReviewListParticipant(id, userId), '更新参与人审核状态失败。');
 
   // Batch import shots from parsed Excel / CSV array
   const importShotsFromData = async (importedData: Array<{ sceneCode: string; shotCode: string; description: string; durationSec: number; shotType: string; cameraMovement: string; assetNames?: string }>): Promise<void> => {
@@ -1009,6 +1025,10 @@ export const AppProvider: React.FC<AppProviderProps> = ({
         addNote,
         updateTaskStatus,
         createReviewList,
+        submitReviewList,
+        completeReviewList,
+        archiveReviewList,
+        completeReviewListParticipant,
         importShotsFromData,
         sendChatMessage,
         updateChatMessageMedia,

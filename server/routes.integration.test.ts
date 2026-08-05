@@ -98,7 +98,7 @@ maybeDescribe('server API integration routes', () => {
   beforeEach(async () => {
     await pool.query('BEGIN');
     try {
-      await pool.query('TRUNCATE audit_logs, chat_message_likes, chat_messages, channel_members, department_channels, review_list_versions, review_lists, notes, versions, project_files, tasks, shot_assets, shots, assets, scenes, project_members, projects, sessions, users RESTART IDENTITY CASCADE');
+      await pool.query('TRUNCATE audit_logs, chat_message_likes, chat_messages, channel_members, department_channels, review_list_participants, review_list_versions, review_lists, notes, versions, project_files, tasks, shot_assets, shots, assets, scenes, project_members, projects, sessions, users RESTART IDENTITY CASCADE');
       await insertUser(ids.admin, 'admin', 'api-admin@example.test');
       await insertUser(ids.creator, 'creator', 'api-creator@example.test');
       await insertUser(ids.client, 'client', 'api-client@example.test');
