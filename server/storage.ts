@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from './config';
 
@@ -161,9 +161,11 @@ export const ensureShotStorageStructure = async (input: {
   storageKey: string;
   absolutePath: string;
   directories: string[];
+  createdRoot: boolean;
 }> => {
   const storageKey = getShotStorageKey(input.projectCode, input.shotCode);
   const absolutePath = resolveWithinStorage(storageKey);
+  const existedBefore = await stat(absolutePath).then(() => true, () => false);
   await mkdir(absolutePath, { recursive: true });
   await Promise.all(
     SHOT_DIRECTORY_STRUCTURE.map(directory =>
@@ -188,7 +190,13 @@ export const ensureShotStorageStructure = async (input: {
     storageKey,
     absolutePath,
     directories: [...SHOT_DIRECTORY_STRUCTURE],
+    createdRoot: !existedBefore,
   };
+};
+
+export const removeShotStorageStructure = async (projectCode: string, shotCode: string): Promise<void> => {
+  const storageKey = getShotStorageKey(projectCode, shotCode);
+  await rm(resolveWithinStorage(storageKey), { recursive: true, force: true });
 };
 
 export const removeProjectStorageStructure = async (storageKey: string): Promise<void> => {

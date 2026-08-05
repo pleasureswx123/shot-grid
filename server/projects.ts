@@ -9,6 +9,7 @@ import {
   ensureShotStorageStructure,
   PROJECT_DIRECTORY_STRUCTURE,
   removeProjectStorageStructure,
+  removeShotStorageStructure,
   resolveWithinStorage,
 } from './storage';
 
@@ -230,31 +231,47 @@ projectsRouter.post('/:projectId/storage/shots', asyncHandler(async (request, re
     return;
   }
 
-  const directories = [];
-  for (const shot of shots) {
-    directories.push(await ensureShotStorageStructure({
-      projectCode: projectResult.rows[0].code,
-      shotId: shot.shotId,
-      shotCode: shot.shotCode,
-      sceneCode: shot.sceneCode,
-    }));
+  const directories: Awaited<ReturnType<typeof ensureShotStorageStructure>>[] = [];
+  const createdDirectories: Array<{ shotCode: string }> = [];
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const shot of shots) {
+      const directory = await ensureShotStorageStructure({
+        projectCode: projectResult.rows[0].code,
+        shotId: shot.shotId,
+        shotCode: shot.shotCode,
+        sceneCode: shot.sceneCode,
+      });
+      directories.push(directory);
+      if (directory.createdRoot) createdDirectories.push({ shotCode: shot.shotCode });
+    }
+    await client.query(
+      `INSERT INTO audit_logs (
+        actor_id, project_id, action, entity_type, entity_id, details, ip_address
+      ) VALUES ($1, $2, 'storage.shots.ensure', 'project', $3, $4::jsonb, $5)`,
+      [
+        request.authUser!.id,
+        projectId,
+        projectId,
+        JSON.stringify({
+          count: directories.length,
+          shots: shots.map(shot => ({ shotCode: shot.shotCode, sceneCode: shot.sceneCode })),
+        }),
+        request.ip || null,
+      ],
+    );
+    await client.query('COMMIT');
+    response.status(201).json({ directories });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    await Promise.all(createdDirectories.map(directory =>
+      removeShotStorageStructure(projectResult.rows[0].code, directory.shotCode).catch(() => undefined)
+    ));
+    throw error;
+  } finally {
+    client.release();
   }
-  await pool.query(
-    `INSERT INTO audit_logs (
-      actor_id, project_id, action, entity_type, entity_id, details, ip_address
-    ) VALUES ($1, $2, 'storage.shots.ensure', 'project', $3, $4::jsonb, $5)`,
-    [
-      request.authUser!.id,
-      projectId,
-      projectId,
-      JSON.stringify({
-        count: directories.length,
-        shots: shots.map(shot => ({ shotCode: shot.shotCode, sceneCode: shot.sceneCode })),
-      }),
-      request.ip || null,
-    ],
-  );
-  response.status(201).json({ directories });
 }));
 
 projectsRouter.get('/:projectId/members', asyncHandler(async (request, response) => {

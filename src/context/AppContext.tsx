@@ -900,92 +900,47 @@ export const AppProvider: React.FC<AppProviderProps> = ({
 
   // Batch import shots from parsed Excel / CSV array
   const importShotsFromData = async (importedData: Array<{ sceneCode: string; shotCode: string; description: string; durationSec: number; shotType: string; cameraMovement: string; assetNames?: string }>): Promise<void> => {
-    const usedShotCodes = new Set(shots.map(shot => shot.shotCode.toUpperCase()));
-    const scenesByCode = new Map<string, Scene>(
-      scenes.map(scene => [
-        normalizeSceneCode(scene.sceneCode),
-        { ...scene, sceneCode: normalizeSceneCode(scene.sceneCode) },
-      ] as const),
-    );
-    const importedShots: Shot[] = [];
-    const importedTasks: Task[] = [];
-
-    importedData.forEach((item) => {
-      const sceneCode = normalizeSceneCode(item.sceneCode);
-      const fallbackNumber = shots.length + importedShots.length + 1;
-      const shotCode = (item.shotCode || `SH${String(fallbackNumber).padStart(3, '0')}`)
-        .trim()
-        .toUpperCase();
-      if (!shotCode || usedShotCodes.has(shotCode)) return;
-      usedShotCodes.add(shotCode);
-
-      let scene = scenesByCode.get(sceneCode);
-      if (!scene) {
-        scene = {
-          id: createLocalId('sc'),
-          projectId: project.id,
-          sceneCode,
-          name: `场次 ${sceneCode}`,
-          description: '从镜头表导入的场次',
-          shotCount: 0,
-        };
-        scenesByCode.set(sceneCode, scene);
-      }
-
-      const shotId = createLocalId('sh');
-      const newShot: Shot = {
-        id: shotId,
-        shotCode,
+    const body = await apiRequest<{ scenes: Scene[]; shots: Shot[]; tasks: Task[] }>('/api/shots/bulk', {
+      method: 'POST',
+      body: JSON.stringify({
         projectId: project.id,
-        sceneId: scene.id,
-        sceneCode,
-        durationSec: Number(item.durationSec) || 5,
-        shotType: item.shotType || '中景',
-        cameraMovement: item.cameraMovement || '固定镜头',
-        description: item.description || '导入镜头描述',
-        dialogue: '',
-        currentStage: '视频生成',
-        assigneeId: currentUser.id,
-        status: '未开始',
-        thumbnailUrl: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80',
-        assetIds: [],
-      };
-      importedShots.push(newShot);
-      importedTasks.push(...createShotPipelineTasks(
-        shotId,
-        sceneCode,
-        shotCode,
-        currentUser.id,
-      ));
+        shots: importedData.map((item, index) => ({
+          sceneCode: normalizeSceneCode(item.sceneCode),
+          shotCode: (item.shotCode || `SH${String(shots.length + index + 1).padStart(3, '0')}`)
+            .trim()
+            .toUpperCase(),
+          description: item.description || '导入镜头描述',
+          durationSec: Number(item.durationSec) || 5,
+          shotType: item.shotType || '中景',
+          cameraMovement: item.cameraMovement || '固定镜头',
+          assigneeId: currentUser.id,
+        })),
+      }),
     });
 
-    if (!importedShots.length) return;
+    const sceneMap = new Map<string, Scene>(scenes.map(scene => [scene.id, scene]));
+    body.scenes.forEach(scene => sceneMap.set(scene.id, scene));
 
-    await ensureShotDirectories(importedShots.map(shot => ({
-      shotId: shot.id,
-      shotCode: shot.shotCode,
-      sceneCode: shot.sceneCode,
-    })));
+    const shotMap = new Map<string, Shot>(shots.map(shot => [shot.id, shot]));
+    body.shots.forEach(shot => shotMap.set(shot.id, shot));
 
-    const nextShots = [...importedShots, ...shots];
+    const taskMap = new Map<string, Task>(tasks.map(task => [task.id, task]));
+    body.tasks.forEach(task => taskMap.set(task.id, task));
+
+    const nextShots = Array.from(shotMap.values()).sort((left, right) =>
+      left.shotCode.localeCompare(right.shotCode, undefined, { numeric: true })
+    );
     const shotCounts = new Map<string, number>();
     nextShots.forEach(shot => {
       const sceneCode = normalizeSceneCode(shot.sceneCode);
       shotCounts.set(sceneCode, (shotCounts.get(sceneCode) || 0) + 1);
     });
 
-    setScenes(
-      Array.from(scenesByCode.values())
-        .map(scene => ({
-          ...scene,
-          shotCount: shotCounts.get(scene.sceneCode) || 0,
-        }))
-        .sort((left, right) =>
-          left.sceneCode.localeCompare(right.sceneCode, undefined, { numeric: true })
-        ),
-    );
+    setScenes(Array.from(sceneMap.values())
+      .map(scene => ({ ...scene, shotCount: shotCounts.get(normalizeSceneCode(scene.sceneCode)) || scene.shotCount || 0 }))
+      .sort((left, right) => left.sceneCode.localeCompare(right.sceneCode, undefined, { numeric: true })));
     setShots(nextShots);
-    setTasks(previous => [...importedTasks, ...previous]);
+    setTasks(Array.from(taskMap.values()).sort((left, right) => right.createdAt.localeCompare(left.createdAt)));
     updateProjectMetrics(nextShots);
   };
 
