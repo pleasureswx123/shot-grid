@@ -109,13 +109,17 @@ npm run build        # 构建前端和服务端
 npm start            # 启动生产构建
 ```
 
-## 生产部署要点
+## 上线前检查清单
 
-- 在工作室服务器运行 PostgreSQL 和应用服务；
-- 媒体文件放 NAS 或对象存储，数据库只保存受控路径及元数据；
-- 为数据库和 NAS 制定每日备份及恢复演练；
-- 内部 HTTPS 部署时设置 `SESSION_COOKIE_SECURE=true`；
-- 不要把 PostgreSQL 端口暴露给员工终端或互联网；
-- Gemini 等外部服务密钥只能保存在服务端。
+- [ ] 生产环境使用 Node.js 20+、PostgreSQL 15+ 和锁定依赖安装；
+- [ ] `.env` 已使用生产配置，密钥和数据库连接串未提交到 Git；
+- [ ] 发布前手动执行 `npm run db:migrate`，生产环境保持 `AUTO_MIGRATE=false`；
+- [ ] 反向代理已启用 HTTPS，且 `SESSION_COOKIE_SECURE=true`；
+- [ ] PostgreSQL 端口未暴露给员工终端或互联网；
+- [ ] `STORAGE_ROOT` 指向受控磁盘、NAS 或对象存储网关目录，应用服务账号可读写；
+- [ ] 上传大小、代理超时、磁盘容量和可选病毒扫描命令已按项目文件规模配置；
+- [ ] 每日数据库备份、保留周期、负责人和恢复演练流程已确认；
+- [ ] `/api/health/live` 和 `/api/health/ready` 在切流前检查通过；
+- [ ] Gemini 等外部服务密钥只保存在服务端。
 
-详细架构和迁移顺序参见 [docs/lan-architecture.md](docs/lan-architecture.md)。
+生产部署、备份恢复、迁移策略和故障排查参见 [docs/production-deployment.md](docs/production-deployment.md)。详细架构和迁移顺序参见 [docs/lan-architecture.md](docs/lan-architecture.md)。
