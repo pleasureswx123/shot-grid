@@ -4,6 +4,7 @@ import type { Project, Scene, Shot, Task } from '../types';
 import {
   createShotPipelineTasks,
   createAssetPipelineTasks,
+  createProjectFinishingTasks,
   normalizeScenesAndTasks,
   type ProjectLocalState,
 } from './AppContext';
@@ -188,4 +189,46 @@ test('legacy per-shot sound and final tasks migrate to one pair of project tasks
     normalized.tasks.find(task => task.entityType === 'shot')?.pipelineStage,
     '视频生成',
   );
+});
+
+test('project sound and final tasks keep project entity fields for version review flow', () => {
+  const projectTasks = createProjectFinishingTasks(project);
+  assert.deepEqual(projectTasks.map(task => task.pipelineStage).sort(), ['声音', '成片']);
+  for (const task of projectTasks) {
+    assert.equal(task.entityType, 'project');
+    assert.equal(task.entityId, project.id);
+  }
+
+  const soundTask = projectTasks.find(task => task.pipelineStage === '声音')!;
+  const soundVersion = {
+    id: 'version-project-sound',
+    taskId: soundTask.id,
+    entityType: soundTask.entityType,
+    entityId: soundTask.entityId,
+    versionNumber: 'V001',
+    fileUrl: 'sound.mp4',
+    fileType: 'video' as const,
+    thumbnailUrl: '',
+    uploaderId: 'user-1',
+    createdAt: '2026-08-05',
+    changelog: '整片声音初版',
+    status: '待审核' as const,
+  };
+
+  assert.equal(soundVersion.entityType, 'project');
+  assert.equal(soundVersion.entityId, project.id);
+  assert.equal(soundVersion.taskId, soundTask.id);
+
+  const reviewedTask = {
+    ...soundTask,
+    latestVersionId: soundVersion.id,
+    status: soundVersion.status === '待审核' ? '待审核' as const : soundTask.status,
+  };
+  const approvedTask = {
+    ...reviewedTask,
+    status: '已完成' as const,
+  };
+
+  assert.equal(reviewedTask.status, '待审核');
+  assert.equal(approvedTask.status, '已完成');
 });

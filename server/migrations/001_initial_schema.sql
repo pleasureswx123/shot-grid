@@ -125,7 +125,7 @@ CREATE TABLE tasks (
   id uuid PRIMARY KEY,
   project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   title varchar(240) NOT NULL,
-  entity_type varchar(20) NOT NULL CHECK (entity_type IN ('shot', 'asset')),
+  entity_type varchar(20) NOT NULL CHECK (entity_type IN ('project', 'shot', 'asset')),
   entity_id uuid NOT NULL,
   pipeline_stage varchar(40) NOT NULL,
   assignee_id uuid REFERENCES users(id) ON DELETE SET NULL,
@@ -148,7 +148,7 @@ CREATE INDEX tasks_assignee_status_idx ON tasks (assignee_id, status);
 CREATE TABLE versions (
   id uuid PRIMARY KEY,
   task_id uuid NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  entity_type varchar(20) NOT NULL CHECK (entity_type IN ('shot', 'asset')),
+  entity_type varchar(20) NOT NULL CHECK (entity_type IN ('project', 'shot', 'asset')),
   entity_id uuid NOT NULL,
   version_number varchar(60) NOT NULL,
   file_url text NOT NULL,
