@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { ChatMessage, DepartmentChannel, User } from '../../types';
 import { ImageEditorModal } from './ImageEditorModal';
@@ -20,6 +20,7 @@ export const CommunicationView: React.FC = () => {
     updateChatMessageMedia,
     toggleLikeMessage,
     createDepartmentChannel,
+    refreshChatMessages,
     addVersion
   } = useApp();
 
@@ -31,6 +32,7 @@ export const CommunicationView: React.FC = () => {
   const [selectedMediaType, setSelectedMediaType] = useState<'none' | 'image' | 'video'>('none');
   const [selectedMediaUrl, setSelectedMediaUrl] = useState<string>('');
   const [selectedMediaName, setSelectedMediaName] = useState<string>('');
+  const [selectedMediaSizeMb, setSelectedMediaSizeMb] = useState<number | undefined>(undefined);
   const [referencedEntity, setReferencedEntity] = useState<{ type: 'shot' | 'asset' | 'task'; id: string; code: string; title?: string } | undefined>(undefined);
 
   // Modals
@@ -48,6 +50,23 @@ export const CommunicationView: React.FC = () => {
 
   const activeChannel = channels.find(c => c.id === selectedChannelId) || channels[0];
   const channelMessages = chatMessages.filter(m => m.channelId === selectedChannelId);
+  const oldestMessageCreatedAt = channelMessages[0]?.createdAt;
+
+  useEffect(() => {
+    if (!selectedChannelId && channels[0]?.id) {
+      setSelectedChannelId(channels[0].id);
+    }
+  }, [channels, selectedChannelId]);
+
+  useEffect(() => {
+    if (!selectedChannelId) return;
+
+    refreshChatMessages(selectedChannelId).catch(error => console.warn('Failed to refresh chat messages:', error));
+    const timer = window.setInterval(() => {
+      refreshChatMessages(selectedChannelId).catch(error => console.warn('Failed to poll chat messages:', error));
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [refreshChatMessages, selectedChannelId]);
 
   // Sample media presets for direct click-to-attach testing
   const presetImages = [
@@ -76,13 +95,14 @@ export const CommunicationView: React.FC = () => {
     e.preventDefault();
     if (!textInput.trim() && selectedMediaType === 'none') return;
 
-    sendChatMessage({
+    void sendChatMessage({
       channelId: selectedChannelId,
       senderId: currentUser.id,
       content: textInput.trim(),
       mediaType: selectedMediaType,
       mediaUrl: selectedMediaUrl || undefined,
       mediaName: selectedMediaName || undefined,
+      mediaSizeMb: selectedMediaSizeMb,
       referencedEntity: referencedEntity
     });
 
@@ -91,6 +111,7 @@ export const CommunicationView: React.FC = () => {
     setSelectedMediaType('none');
     setSelectedMediaUrl('');
     setSelectedMediaName('');
+    setSelectedMediaSizeMb(undefined);
     setReferencedEntity(undefined);
     setShowPresetGallery('none');
   };
@@ -106,12 +127,13 @@ export const CommunicationView: React.FC = () => {
     setSelectedMediaType(isVideo ? 'video' : 'image');
     setSelectedMediaUrl(dummyUrl);
     setSelectedMediaName(file.name);
+    setSelectedMediaSizeMb(file.size / 1024 / 1024);
     setShowPresetGallery('none');
   };
 
   const handleSaveEditedImage = (editedDataUrl: string) => {
     if (editingImageMessage) {
-      updateChatMessageMedia(editingImageMessage.id, editedDataUrl);
+      void updateChatMessageMedia(editingImageMessage.id, editedDataUrl);
       setEditingImageMessage(null);
     }
   };
@@ -292,6 +314,18 @@ export const CommunicationView: React.FC = () => {
 
         {/* Messages Stream */}
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          {oldestMessageCreatedAt && (
+            <div className="flex justify-center mb-4">
+              <button
+                type="button"
+                onClick={() => refreshChatMessages(selectedChannelId, { before: oldestMessageCreatedAt, append: true })}
+                className="px-3 py-1.5 rounded-lg text-xs bg-slate-900 border border-slate-800 text-slate-300 hover:border-indigo-500 hover:text-indigo-200"
+              >
+                加载更早消息
+              </button>
+            </div>
+          )}
+
           {channelMessages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-slate-500 space-y-3">
               <MessageSquare className="w-10 h-10 text-slate-700" />
@@ -428,7 +462,7 @@ export const CommunicationView: React.FC = () => {
                     {/* Footer Actions / Reactions */}
                     <div className="flex items-center space-x-3 mt-1.5 text-[11px] text-slate-500">
                       <button
-                        onClick={() => toggleLikeMessage(msg.id, currentUser.id)}
+                        onClick={() => void toggleLikeMessage(msg.id, currentUser.id)}
                         className={`flex items-center space-x-1 transition ${
                           hasLiked ? 'text-rose-400 font-semibold' : 'hover:text-slate-300'
                         }`}
@@ -698,12 +732,12 @@ export const CommunicationView: React.FC = () => {
               <button
                 onClick={() => {
                   if (!newChanName.trim()) return;
-                  createDepartmentChannel({
+                  void createDepartmentChannel({
                     name: newChanName.trim(),
                     department: newChanDept,
                     description: newChanDesc.trim() || '部门日常工作探讨频道',
                     icon: 'Sparkles'
-                  });
+                  }).then(channel => setSelectedChannelId(channel.id));
                   setShowNewChannelModal(false);
                   setNewChanName('');
                   setNewChanDesc('');
