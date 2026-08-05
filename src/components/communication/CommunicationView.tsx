@@ -236,7 +236,7 @@ export const CommunicationView: React.FC = () => {
           <div className="pt-2 border-t border-slate-800/60">
             <div className="px-2 pb-2 text-[10px] font-semibold text-slate-500 uppercase tracking-wider flex items-center space-x-1">
               <Users className="w-3 h-3 text-emerald-400" />
-              <span>项目成员（业务数据待迁移）</span>
+              <span>项目成员</span>
             </div>
 
             <div className="space-y-1.5">

@@ -232,3 +232,29 @@ test('project sound and final tasks keep project entity fields for version revie
   assert.equal(reviewedTask.status, '待审核');
   assert.equal(approvedTask.status, '已完成');
 });
+
+
+test('project runtime state starts from API-ready empty collections instead of browser-persisted business data', () => {
+  const state: ProjectLocalState = {
+    scenes: [],
+    shots: [],
+    assets: [],
+    tasks: [],
+    versions: [],
+    notes: [],
+    reviewLists: [],
+    files: [],
+    channels: [],
+    chatMessages: [],
+  };
+  const normalized = normalizeScenesAndTasks(project, state);
+  assert.equal(normalized.shots.length, 0);
+  assert.equal(normalized.assets.length, 0);
+  assert.equal(normalized.versions.length, 0);
+  assert.equal(normalized.notes.length, 0);
+  assert.equal(normalized.reviewLists.length, 0);
+  assert.equal(normalized.files.length, 0);
+  assert.equal(normalized.channels.length, 0);
+  assert.equal(normalized.chatMessages.length, 0);
+  assert.equal(normalized.tasks.every(task => task.entityType === 'project'), true);
+});
