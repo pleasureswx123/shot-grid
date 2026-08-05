@@ -51,7 +51,8 @@ interface AppContextType {
     createdCount: number;
     skippedCount: number;
   };
-  addVersion: (versionData: Omit<Version, 'id' | 'createdAt'>) => void;
+  addVersion: (versionData: Omit<Version, 'id' | 'createdAt'>) => Promise<void>;
+  uploadVersionFile: (file: File, metadata: { taskId: string; versionNumber: string; fileType: 'video' | 'image' }) => Promise<ProjectFile>;
   updateVersionStatus: (versionId: string, status: VersionStatus) => void;
   addNote: (noteData: Omit<Note, 'id' | 'createdAt'>) => void;
   updateTaskStatus: (taskId: string, status: TaskStatus) => void;
@@ -569,7 +570,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
       apiRequest<{ shots: Shot[] }>(`/api/shots?${query}`),
       apiRequest<{ assets: Asset[] }>(`/api/assets?${query}`),
       apiRequest<{ tasks: Task[] }>(`/api/tasks?${query}`),
-      apiRequest<{ versions: Version[] }>(`/api/versions?${query}`),
+      apiRequest<{ versions: Version[] }>(`/api/projects/${project.id}/versions`),
       apiRequest<{ notes: Note[] }>(`/api/notes?${query}`),
       apiRequest<{ reviewLists: ReviewList[] }>(`/api/reviews?${query}`),
       apiRequest<{ channels: DepartmentChannel[] }>(`/api/chat/channels?${query}`),
@@ -783,6 +784,25 @@ export const AppProvider: React.FC<AppProviderProps> = ({
     };
   };
 
+
+  const uploadVersionFile = async (file: File, metadata: { taskId: string; versionNumber: string; fileType: 'video' | 'image' }) => {
+    const task = tasks.find(item => item.id === metadata.taskId);
+    if (!task) throw new Error('请选择有效任务。');
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('projectId', project.id);
+    formData.append('fileType', 'review');
+    formData.append('versionNumber', metadata.versionNumber);
+    if (task.entityType !== 'project') {
+      formData.append('entityType', task.entityType);
+      formData.append('entityId', task.entityId);
+    }
+    const response = await fetch('/api/files/upload', { method: 'POST', credentials: 'same-origin', body: formData });
+    if (!response.ok) throw new Error(await parseApiError(response, `文件上传失败（${response.status}）`));
+    const body = await response.json() as { file: ProjectFile };
+    return body.file;
+  };
+
   // Add new Version
   const addVersion = async (versionData: Omit<Version, 'id' | 'createdAt'>) => {
     await apiRequest<{ version: Version }>('/api/versions', {
@@ -795,7 +815,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
 
   // Approve / Reject / Update Version Status
   const updateVersionStatus = (versionId: string, status: VersionStatus) => {
-    void apiRequest<{ version: Version }>(`/api/versions/${versionId}`, {
+    void apiRequest<{ version: Version }>(`/api/versions/${versionId}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ status }),
     }).catch(error => console.warn('Failed to update version status:', error));
@@ -1031,6 +1051,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
         addAsset,
         importAssetsFromData,
         addVersion,
+        uploadVersionFile,
         updateVersionStatus,
         addNote,
         updateTaskStatus,

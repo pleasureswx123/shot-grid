@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Sparkles, Upload, FileVideo, FileImage, HardDrive } from 'lucide-react';
-import { Version } from '../../types';
+import { X, Sparkles, Upload } from 'lucide-react';
 
 interface VersionUploadModalProps {
   initialTaskId?: string;
@@ -9,7 +8,7 @@ interface VersionUploadModalProps {
 }
 
 export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialTaskId, onClose }) => {
-  const { tasks, shots, assets, currentUser, addVersion } = useApp();
+  const { tasks, currentUser, addVersion, uploadVersionFile } = useApp();
 
   const activeTask = tasks.find(t => t.id === initialTaskId) || tasks[0];
   
@@ -19,6 +18,9 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
   const [versionNumber, setVersionNumber] = useState<string>('V003');
   const [fileType, setFileType] = useState<'video' | 'image'>('video');
   const [fileUrl, setFileUrl] = useState<string>('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [thumbnailUrl, setThumbnailUrl] = useState<string>('https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80');
   const [changelog, setChangelog] = useState<string>('修改了人物表情过渡与镜头光晕效果。');
 
@@ -39,34 +41,47 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
     { name: 'ForBiggerEscapes (宇宙奔跑)', url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4', thumb: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=600&auto=format&fit=crop&q=80' }
   ];
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedTask) return;
+    if (!selectedTask || isSubmitting) return;
+    setIsSubmitting(true);
+    setError(null);
 
-    addVersion({
-      taskId: selectedTask.id,
-      entityType: selectedTask.entityType,
-      entityId: selectedTask.entityId,
-      versionNumber,
-      fileUrl,
-      fileType,
-      thumbnailUrl,
-      uploaderId: currentUser.id,
-      changelog,
-      status: '待审核',
-      aiParams: {
-        modelName,
-        prompt,
-        seed,
-        cameraMotion,
-        generationCost,
-        nasPath,
-        resolution: '3840x2160',
-        aspectRatio: '2.39:1'
-      }
-    });
+    try {
+      const uploadedFile = selectedFile
+        ? await uploadVersionFile(selectedFile, { taskId: selectedTask.id, versionNumber, fileType })
+        : null;
 
-    onClose();
+      await addVersion({
+        taskId: selectedTask.id,
+        entityType: selectedTask.entityType,
+        entityId: selectedTask.entityId,
+        versionNumber,
+        fileId: uploadedFile?.id,
+        fileUrl: uploadedFile?.contentUrl || fileUrl,
+        fileType,
+        thumbnailUrl,
+        uploaderId: currentUser.id,
+        changelog,
+        status: '待审核',
+        aiParams: {
+          modelName,
+          prompt,
+          seed,
+          cameraMotion,
+          generationCost,
+          nasPath,
+          resolution: '3840x2160',
+          aspectRatio: '2.39:1'
+        }
+      });
+
+      onClose();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : '提交版本失败。');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -146,6 +161,22 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
             </div>
           </div>
 
+          <div className="space-y-1">
+            <label className="text-slate-400 font-semibold">上传审核文件（可选，优先使用托管文件）</label>
+            <label className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-slate-700 bg-slate-800/60 p-3 text-slate-300 hover:border-indigo-500 cursor-pointer">
+              <Upload className="w-4 h-4" />
+              <span>{selectedFile ? selectedFile.name : '选择本地视频或图片，先上传到 /api/files/upload'}</span>
+              <input
+                type="file"
+                accept={fileType === 'video' ? 'video/*' : 'image/*'}
+                className="hidden"
+                onChange={event => setSelectedFile(event.target.files?.[0] || null)}
+              />
+            </label>
+          </div>
+
+          {error && <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-2 text-rose-200">{error}</div>}
+
           {/* Changelog */}
           <div className="space-y-1">
             <label className="text-slate-400 font-semibold">本次修改说明 (Changelog)</label>
@@ -218,8 +249,9 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
             <button
               type="submit"
               className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-bold shadow-lg shadow-indigo-600/30"
+              disabled={isSubmitting}
             >
-              提交版本审核
+              {isSubmitting ? '提交中…' : '提交版本审核'}
             </button>
           </div>
         </form>

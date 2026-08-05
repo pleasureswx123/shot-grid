@@ -22,6 +22,19 @@ const asyncHandler = (
   handler(request, response, next).catch(next);
 };
 
+
+const canReadProject = async (projectId: string, userId: string, systemRole: UserRole) => {
+  if (systemRole === 'admin') return true;
+  const result = await pool.query(
+    `SELECT 1
+       FROM project_members
+      WHERE project_id = $1
+        AND user_id = $2`,
+    [projectId, userId],
+  );
+  return Boolean(result.rowCount);
+};
+
 const canManageProject = async (projectId: string, userId: string, systemRole: UserRole) => {
   if (systemRole === 'admin') return true;
   const result = await pool.query(
@@ -198,7 +211,7 @@ projectsRouter.post('/:projectId/storage/shots', asyncHandler(async (request, re
     response.status(400).json({ error: '项目或镜头目录请求无效。' });
     return;
   }
-  if (!await canWriteProject(projectId, request.authUser!.id, request.authUser!.role)) {
+  if (!await canReadProject(projectId, request.authUser!.id, request.authUser!.role)) {
     response.status(403).json({ error: '您没有在该项目创建镜头目录的权限。' });
     return;
   }
@@ -420,4 +433,27 @@ projectsRouter.delete('/:projectId/members/:userId', asyncHandler(async (request
   } finally {
     client.release();
   }
+}));
+
+projectsRouter.get('/:projectId/versions', asyncHandler(async (request, response) => {
+  const projectId = request.params.projectId;
+  if (!UUID_PATTERN.test(projectId)) {
+    response.status(400).json({ error: '项目 ID 无效。' });
+    return;
+  }
+  if (!await canReadProject(projectId, request.authUser!.id, request.authUser!.role)) {
+    response.status(403).json({ error: '您不是该项目的成员。' });
+    return;
+  }
+  const result = await pool.query(
+    `SELECT id, task_id AS "taskId", entity_type AS "entityType", entity_id AS "entityId",
+            version_number AS "versionNumber", file_id AS "fileId", file_url AS "fileUrl",
+            file_type AS "fileType", thumbnail_url AS "thumbnailUrl", uploader_id AS "uploaderId",
+            created_at AS "createdAt", changelog, status, ai_params AS "aiParams"
+       FROM versions
+      WHERE task_id IN (SELECT id FROM tasks WHERE project_id=$1)
+      ORDER BY created_at DESC`,
+    [projectId],
+  );
+  response.json({ versions: result.rows });
 }));

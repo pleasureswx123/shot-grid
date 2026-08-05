@@ -56,7 +56,8 @@ export interface Version {
   entityType: EntityType;
   entityId: string;
   versionNumber: string;    // e.g. V001, V002
-  fileUrl: string;          // MP4 video or PNG image
+  fileId?: string;          // 托管文件 ID，对应 project_files.id
+  fileUrl: string;          // MP4 video or PNG image, or /api/files/:id/content
   fileType: 'video' | 'image';
   thumbnailUrl: string;
   uploaderId: string;
@@ -202,7 +203,9 @@ export interface ProjectFile {
   fileType: 'review' | 'source'; // 网页审核文件 vs NAS源文件
   extension: string;
   sizeMb: number;
+  sizeBytes?: number;
   url: string;
+  contentUrl?: string | null;
   nasPath?: string;
   entityType: EntityType;
   entityId: string;
