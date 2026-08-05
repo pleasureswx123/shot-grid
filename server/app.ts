@@ -16,14 +16,30 @@ import { versionsRouter } from './versions';
 import { projectReviewListsRouter, reviewListsRouter } from './reviews';
 import { notesRouter, versionNotesRouter } from './notes';
 import { chatRouter } from './chat';
+import { accessLogger } from './audit';
 
 const projectRoot = process.cwd();
+
+const contentSecurityPolicy = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "media-src 'self' blob:",
+  "connect-src 'self' ws: wss:",
+  "font-src 'self' data:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "frame-ancestors 'self'",
+  "form-action 'self'",
+].join('; ');
 
 const applySecurityHeaders: RequestHandler = (_request, response, next) => {
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('X-Frame-Options', 'SAMEORIGIN');
   response.setHeader('Referrer-Policy', 'same-origin');
   response.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  response.setHeader('Content-Security-Policy', contentSecurityPolicy);
   next();
 };
 
@@ -55,6 +71,8 @@ const verifySameOrigin: RequestHandler = (request, response, next) => {
 export const createApp = async () => {
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', config.trustProxy);
+  app.use(accessLogger);
   app.use(applySecurityHeaders);
   app.use(express.json({ limit: '2mb' }));
   app.use(verifySameOrigin);

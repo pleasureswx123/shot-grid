@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { stat } from 'node:fs/promises';
+import { promisify } from 'node:util';
 import path from 'node:path';
 import { Router } from 'express';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
@@ -15,6 +17,9 @@ import {
   resolveWithinStorage,
   sha256File,
 } from './storage';
+import { recordAuditLog } from './audit';
+
+const execFileAsync = promisify(execFile);
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ENTITY_TYPES = new Set(['shot', 'asset']);
@@ -29,6 +34,31 @@ const ALLOWED_EXTENSIONS = new Set([
   'fbx', 'obj', 'abc', 'usd', 'usda', 'usdc',
   'zip', '7z', 'rar',
 ]);
+
+const EXTENSION_MIME_PREFIXES = new Map<string, string[]>([
+  ['mp4', ['video/mp4']], ['mov', ['video/quicktime']], ['webm', ['video/webm']], ['mkv', ['video/']], ['avi', ['video/']],
+  ['png', ['image/png']], ['jpg', ['image/jpeg']], ['jpeg', ['image/jpeg']], ['webp', ['image/webp']], ['gif', ['image/gif']], ['tif', ['image/tiff']], ['tiff', ['image/tiff']],
+  ['pdf', ['application/pdf']], ['txt', ['text/plain']], ['json', ['application/json', 'text/plain']], ['csv', ['text/csv', 'application/vnd.ms-excel', 'text/plain']],
+  ['xlsx', ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']], ['docx', ['application/vnd.openxmlformats-officedocument.wordprocessingml.document']],
+  ['wav', ['audio/wav', 'audio/x-wav']], ['mp3', ['audio/mpeg']], ['aac', ['audio/aac', 'audio/']],
+  ['zip', ['application/zip', 'application/x-zip-compressed']], ['7z', ['application/x-7z-compressed']], ['rar', ['application/vnd.rar', 'application/x-rar-compressed']],
+]);
+const DESIGN_SOURCE_EXTENSIONS = new Set(['exr', 'dpx', 'psd', 'psb', 'ai', 'aep', 'prproj', 'drp', 'blend', 'c4d', 'ma', 'mb', 'fbx', 'obj', 'abc', 'usd', 'usda', 'usdc']);
+
+const validateMimeForExtension = (extension: string, mimeType: string): string | null => {
+  const normalizedMimeType = (mimeType || 'application/octet-stream').toLowerCase();
+  const allowedPrefixes = EXTENSION_MIME_PREFIXES.get(extension);
+  if (allowedPrefixes?.some(prefix => normalizedMimeType.startsWith(prefix))) return null;
+  if (DESIGN_SOURCE_EXTENSIONS.has(extension) && ['application/octet-stream', 'application/x-empty'].includes(normalizedMimeType)) return null;
+  return `文件扩展名 .${extension} 与浏览器上报的 MIME 类型 ${normalizedMimeType} 不一致。`;
+};
+
+const scanUploadForThreats = async (filePath: string): Promise<'not_configured' | 'clean'> => {
+  if (!config.virusScanCommand) return 'not_configured';
+  const [command, ...args] = config.virusScanCommand.split(' ').filter(Boolean);
+  await execFileAsync(command, [...args, filePath], { timeout: 120_000 });
+  return 'clean';
+};
 
 interface ProjectAccess {
   code: string;
@@ -210,6 +240,12 @@ filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, res
 
     const fileId = randomUUID();
     const extension = path.extname(request.file.originalname).slice(1).toLowerCase();
+    const mimeError = validateMimeForExtension(extension, request.file.mimetype);
+    if (mimeError) {
+      response.status(400).json({ error: mimeError });
+      return;
+    }
+    const scanStatus = await scanUploadForThreats(temporaryPath);
     const storageKey = createManagedStorageKey({
       projectCode: access.code,
       entityType,
@@ -262,18 +298,13 @@ filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, res
           request.authUser!.id,
         ],
       );
-      await client.query(
-        `INSERT INTO audit_logs (
-          actor_id, project_id, action, entity_type, entity_id, details, ip_address
-        ) VALUES ($1, $2, 'file.upload', 'file', $3, $4::jsonb, $5)`,
-        [
-          request.authUser!.id,
-          projectId,
-          fileId,
-          JSON.stringify({ name: request.file.originalname, sizeBytes: request.file.size, checksum }),
-          request.ip || null,
-        ],
-      );
+      await recordAuditLog(client, request, {
+        action: 'file.upload',
+        projectId,
+        entityType: 'file',
+        entityId: fileId,
+        details: { name: request.file.originalname, sizeBytes: request.file.size, checksum, mimeType: request.file.mimetype, scanStatus },
+      });
       await client.query('COMMIT');
       response.status(201).json({ file: mapFile(result.rows[0]) });
     } catch (error) {

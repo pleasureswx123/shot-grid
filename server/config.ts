@@ -33,6 +33,9 @@ export const config = {
   bootstrapAdminPassword: process.env.BOOTSTRAP_ADMIN_PASSWORD || '',
   sessionTtlHours: readInteger('SESSION_TTL_HOURS', 168),
   sessionCookieSecure: readBoolean('SESSION_COOKIE_SECURE', false),
+  sessionCookieSecureExplicit: process.env.SESSION_COOKIE_SECURE !== undefined,
+  trustProxy: process.env.TRUST_PROXY || 'loopback, linklocal, uniquelocal',
+  virusScanCommand: process.env.VIRUS_SCAN_COMMAND || '',
   storageRoot: path.resolve(process.env.STORAGE_ROOT || path.join(process.cwd(), 'storage')),
   maxUploadBytes: readInteger('MAX_UPLOAD_MB', 2048) * 1024 * 1024,
 };
@@ -43,3 +46,12 @@ export const requireDatabaseUrl = (): string => {
   }
   return config.databaseUrl;
 };
+
+if (config.nodeEnv === 'production' && (!config.sessionCookieSecureExplicit || !config.sessionCookieSecure)) {
+  const message = 'Production requires SESSION_COOKIE_SECURE=true so browser sessions are only sent over HTTPS.';
+  if (process.env.ALLOW_INSECURE_PRODUCTION_COOKIES === 'true') {
+    console.error(`[security] ${message} Continuing only because ALLOW_INSECURE_PRODUCTION_COOKIES=true.`);
+  } else {
+    throw new Error(`${message} Set SESSION_COOKIE_SECURE=true or explicitly acknowledge the risk with ALLOW_INSECURE_PRODUCTION_COOKIES=true.`);
+  }
+}

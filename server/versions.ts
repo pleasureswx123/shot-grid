@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { pool } from './db';
 import { asyncHandler, readString, requireProjectAccess, requireProjectAccessFromRequest, UUID_PATTERN } from './apiUtils';
 import { validateEntityBelongsToProject } from './entityValidation';
+import { recordAuditLog } from './audit';
 
 export const versionsRouter = Router();
 
@@ -55,12 +56,21 @@ versionsRouter.post('/', asyncHandler(async (req, res) => {
 }));
 
 versionsRouter.patch('/:id/status', asyncHandler(async (req, res) => {
-  const a = await pool.query('SELECT t.project_id,v.entity_type,v.entity_id FROM versions v JOIN tasks t ON t.id=v.task_id WHERE v.id=$1', [req.params.id]);
+  const a = await pool.query('SELECT t.project_id,v.entity_type,v.entity_id,v.status FROM versions v JOIN tasks t ON t.id=v.task_id WHERE v.id=$1', [req.params.id]);
   if (!a.rowCount) { res.status(404).json({ error: '版本不存在。' }); return; }
   if (!await requireProjectAccess(a.rows[0].project_id, req.authUser!.id, req.authUser!.role)) { res.status(403).json({ error: '您不是该项目的成员。' }); return; }
   const validationError = validateEntityBelongsToProject(a.rows[0].entity_type, a.rows[0].entity_id, a.rows[0].project_id);
   if (validationError) { res.status(400).json({ error: validationError }); return; }
   const r = await pool.query(`WITH updated AS (UPDATE versions SET status=coalesce($2,status) WHERE id=$1 RETURNING *) ${versionSelect.replace('FROM versions', 'FROM updated')}`, [req.params.id, req.body?.status ?? null]);
+  if (typeof req.body?.status === 'string' && req.body.status !== a.rows[0].status) {
+    await recordAuditLog(pool, req, {
+      action: 'review.status.change',
+      projectId: a.rows[0].project_id,
+      entityType: 'version',
+      entityId: req.params.id,
+      details: { from: a.rows[0].status, to: req.body.status },
+    });
+  }
   res.json({ version: r.rows[0] });
 }));
 
