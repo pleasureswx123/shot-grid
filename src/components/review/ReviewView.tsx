@@ -5,7 +5,7 @@ import {
   Sparkles, Layers, Sliders, ChevronRight, Plus, Eye,
   Copy, FileVideo, MessageSquare
 } from 'lucide-react';
-import { Version, VersionStatus } from '../../types';
+import type { NoteAnnotation } from '../../types';
 import { CanvasAnnotator } from '../common/CanvasAnnotator';
 
 export const ReviewView: React.FC = () => {
@@ -41,6 +41,7 @@ export const ReviewView: React.FC = () => {
   const [newNoteText, setNewNoteText] = useState('');
   const [isMandatory, setIsMandatory] = useState(true);
   const [lastAnnotationData, setLastAnnotationData] = useState<string | null>(null);
+  const [lastAnnotations, setLastAnnotations] = useState<NoteAnnotation[]>([]);
 
   // New Playlist Modal state
   const [showNewPlaylistModal, setShowNewPlaylistModal] = useState(false);
@@ -79,20 +80,22 @@ export const ReviewView: React.FC = () => {
       timestampSec: timeSec,
       timestampText: timeStr,
       annotationDataUrl: lastAnnotationData || undefined,
+      annotations: lastAnnotations.length ? lastAnnotations : undefined,
       isMandatory,
       status: '待处理'
     });
     setNewNoteText('');
     setLastAnnotationData(null);
+    setLastAnnotations([]);
   };
 
-  const handleCreatePlaylist = () => {
+  const handleCreatePlaylist = async () => {
     if (!newPlaylistTitle.trim()) return;
     const allPendingVersionIds = versions.filter(v => v.status === '待审核').map(v => v.id);
-    createReviewList(
+    await createReviewList(
       newPlaylistTitle,
       new Date().toISOString().split('T')[0],
-      allPendingVersionIds.length > 0 ? allPendingVersionIds : [versions[0].id],
+      allPendingVersionIds.length > 0 ? allPendingVersionIds : [activeVersion.id],
       '新建导演在线集中审核单'
     );
     setNewPlaylistTitle('');
@@ -243,8 +246,14 @@ export const ReviewView: React.FC = () => {
                 <CanvasAnnotator
                   width={800}
                   height={450}
-                  onSaveAnnotation={dataUrl => setLastAnnotationData(dataUrl)}
-                  onClear={() => setLastAnnotationData(null)}
+                  onSaveAnnotation={(dataUrl, annotations) => {
+                    setLastAnnotationData(dataUrl);
+                    setLastAnnotations(annotations);
+                  }}
+                  onClear={() => {
+                    setLastAnnotationData(null);
+                    setLastAnnotations([]);
+                  }}
                 />
               )}
 

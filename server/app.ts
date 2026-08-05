@@ -13,8 +13,8 @@ import { shotsRouter } from './shots';
 import { assetsRouter } from './assets';
 import { tasksRouter } from './tasks';
 import { versionsRouter } from './versions';
-import { reviewsRouter } from './reviews';
-import { notesRouter } from './notes';
+import { projectReviewListsRouter, reviewListsRouter } from './reviews';
+import { notesRouter, versionNotesRouter } from './notes';
 import { chatRouter } from './chat';
 
 const projectRoot = process.cwd();
@@ -83,7 +83,9 @@ export const createApp = async () => {
   app.use('/api/assets', requireAuth, assetsRouter);
   app.use('/api/tasks', requireAuth, tasksRouter);
   app.use('/api/versions', requireAuth, versionsRouter);
-  app.use('/api/reviews', requireAuth, reviewsRouter);
+  app.use('/api/projects/:projectId/review-lists', requireAuth, projectReviewListsRouter);
+  app.use('/api/review-lists', requireAuth, reviewListsRouter);
+  app.use('/api/versions/:versionId/notes', requireAuth, versionNotesRouter);
   app.use('/api/notes', requireAuth, notesRouter);
   app.use('/api/chat', requireAuth, chatRouter);
   app.get('/api/system/info', requireAuth, (request, response) => {
