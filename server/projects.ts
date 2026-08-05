@@ -122,6 +122,25 @@ projectsRouter.post(
          VALUES ($1, $2, $3)`,
         [projectId, request.authUser!.id, ownerProjectRole],
       );
+      const soundTaskId = randomUUID();
+      await client.query(
+        `INSERT INTO tasks (
+          id, project_id, title, entity_type, entity_id, pipeline_stage,
+          assignee_id, status, priority, due_date, requirements
+        ) VALUES
+          ($1, $2, $3, 'project', $2, '声音', $4, '未开始', '高', now()::date + 12, $5),
+          ($6, $2, $7, 'project', $2, '成片', $4, '未开始', '高', now()::date + 14, $8)`,
+        [
+          soundTaskId,
+          projectId,
+          `${name} - 整片声音制作`,
+          request.authUser!.id,
+          '覆盖整部影片的对白、音效、环境声、音乐与最终混音。',
+          randomUUID(),
+          `${name} - 成片合成与交付`,
+          '覆盖整部影片的最终画面、声音合成、质检、输出与交付。',
+        ],
+      );
       await client.query(
         `INSERT INTO audit_logs (
           actor_id, project_id, action, entity_type, entity_id, details, ip_address

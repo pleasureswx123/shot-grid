@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { X, Sparkles, Upload, FileVideo, FileImage, HardDrive } from 'lucide-react';
-import { EntityType, Version } from '../../types';
+import { Version } from '../../types';
 
 interface VersionUploadModalProps {
   initialTaskId?: string;
@@ -28,7 +28,10 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
   const [seed, setSeed] = useState<string>('88491204');
   const [cameraMotion, setCameraMotion] = useState<string>('缓慢推进 (Push In)');
   const [generationCost, setGenerationCost] = useState<number>(12.5);
-  const [nasPath, setNasPath] = useState<string>(`\\\\NAS\\\\NOMUD\\\\EP01\\\\SC03\\\\${selectedTask?.entityId || 'SH010'}\\\\video\\\\v003\\\\`);
+  const defaultNasPath = selectedTask?.entityType === 'project'
+    ? `\\NAS\\NOMUD\\project\\${selectedTask.entityId}\\${selectedTask.pipelineStage}\\v003\\`
+    : `\\NAS\\NOMUD\\EP01\\SC03\\${selectedTask?.entityId || 'SH010'}\\video\\v003\\`;
+  const [nasPath, setNasPath] = useState<string>(defaultNasPath);
 
   const sampleVideos = [
     { name: 'ForBiggerBlazes (科幻警报火焰)', url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4', thumb: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80' },

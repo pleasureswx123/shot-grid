@@ -795,6 +795,10 @@ export const AppProvider: React.FC<AppProviderProps> = ({
 
   // Approve / Reject / Update Version Status
   const updateVersionStatus = (versionId: string, status: VersionStatus) => {
+    void apiRequest<{ version: Version }>(`/api/versions/${versionId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    }).catch(error => console.warn('Failed to update version status:', error));
     const version = versions.find(v => v.id === versionId);
     if (!version) return;
 
