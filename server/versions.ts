@@ -5,6 +5,7 @@ import { asyncHandler, readString, requireProjectAccessFromRequest, UUID_PATTERN
 import { validateEntityBelongsToProject } from './entityValidation';
 import { recordAuditLog } from './audit';
 import { canReviewVersion, canSubmitVersion, getProjectPermissionContext } from './permissions';
+import { applyVersionStatusEffects, assertVersionStatusTransition, isEntityLockedForNonAdmin } from './workflow';
 
 export const versionsRouter = Router();
 
@@ -57,30 +58,54 @@ versionsRouter.post('/', asyncHandler(async (req, res) => {
 }));
 
 versionsRouter.patch('/:id/status', asyncHandler(async (req, res) => {
-  const a = await pool.query('SELECT t.project_id,v.entity_type,v.entity_id,v.status FROM versions v JOIN tasks t ON t.id=v.task_id WHERE v.id=$1', [req.params.id]);
+  const a = await pool.query('SELECT t.project_id,v.task_id,v.entity_type,v.entity_id,v.status FROM versions v JOIN tasks t ON t.id=v.task_id WHERE v.id=$1', [req.params.id]);
   if (!a.rowCount) { res.status(404).json({ error: '版本不存在。' }); return; }
   if (!canReviewVersion(await getProjectPermissionContext(a.rows[0].project_id, req.authUser!.id, req.authUser!.role))) { res.status(403).json({ error: '您没有审核版本的权限。' }); return; }
   const validationError = validateEntityBelongsToProject(a.rows[0].entity_type, a.rows[0].entity_id, a.rows[0].project_id);
   if (validationError) { res.status(400).json({ error: validationError }); return; }
-  const r = await pool.query(`WITH updated AS (UPDATE versions SET status=coalesce($2,status) WHERE id=$1 RETURNING *) ${versionSelect.replace('FROM versions', 'FROM updated')}`, [req.params.id, req.body?.status ?? null]);
-  if (typeof req.body?.status === 'string' && req.body.status !== a.rows[0].status) {
-    await recordAuditLog(pool, req, {
-      action: 'review.status.change',
-      projectId: a.rows[0].project_id,
-      entityType: 'version',
-      entityId: req.params.id,
-      details: { from: a.rows[0].status, to: req.body.status },
-    });
+  const requestedStatus = typeof req.body?.status === 'string' ? req.body.status.trim() : a.rows[0].status;
+  let nextStatus;
+  try {
+    nextStatus = assertVersionStatusTransition(a.rows[0].status, requestedStatus);
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : '版本状态流转无效。' });
+    return;
   }
-  res.json({ version: r.rows[0] });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query(`WITH updated AS (UPDATE versions SET status=$2 WHERE id=$1 RETURNING *) ${versionSelect.replace('FROM versions', 'FROM updated')}`, [req.params.id, nextStatus]);
+    if (nextStatus !== a.rows[0].status) {
+      await applyVersionStatusEffects(client, { id: req.params.id, task_id: a.rows[0].task_id, entity_type: a.rows[0].entity_type, entity_id: a.rows[0].entity_id }, nextStatus);
+      await recordAuditLog(client, req, {
+        action: 'review.status.change',
+        projectId: a.rows[0].project_id,
+        entityType: 'version',
+        entityId: req.params.id,
+        details: { from: a.rows[0].status, to: nextStatus },
+      });
+    }
+    await client.query('COMMIT');
+    res.json({ version: r.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }));
 
 versionsRouter.patch('/:id', asyncHandler(async (req, res) => {
-  const a = await pool.query('SELECT t.project_id,v.entity_type,v.entity_id FROM versions v JOIN tasks t ON t.id=v.task_id WHERE v.id=$1', [req.params.id]);
+  const a = await pool.query('SELECT t.project_id,v.entity_type,v.entity_id,v.status FROM versions v JOIN tasks t ON t.id=v.task_id WHERE v.id=$1', [req.params.id]);
   if (!a.rowCount) { res.status(404).json({ error: '版本不存在。' }); return; }
   if (!canReviewVersion(await getProjectPermissionContext(a.rows[0].project_id, req.authUser!.id, req.authUser!.role))) { res.status(403).json({ error: '您没有审核版本的权限。' }); return; }
+  if (a.rows[0].status === '最终版' && req.authUser!.role !== 'admin') { res.status(403).json({ error: '最终版已锁定，仅管理员可继续修改。' }); return; }
   const validationError = validateEntityBelongsToProject(a.rows[0].entity_type, a.rows[0].entity_id, a.rows[0].project_id);
   if (validationError) { res.status(400).json({ error: validationError }); return; }
-  const r = await pool.query(`WITH updated AS (UPDATE versions SET status=coalesce($2,status) WHERE id=$1 RETURNING *) ${versionSelect.replace('FROM versions', 'FROM updated')}`, [req.params.id, req.body?.status ?? null]);
+  if (isEntityLockedForNonAdmin(a.rows[0].status) && req.authUser!.role !== 'admin') { res.status(403).json({ error: '最终版已锁定，仅管理员可继续修改。' }); return; }
+  const requestedStatus = typeof req.body?.status === 'string' ? req.body.status.trim() : a.rows[0].status;
+  let nextStatus;
+  try { nextStatus = assertVersionStatusTransition(a.rows[0].status, requestedStatus); } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : '版本状态流转无效。' }); return; }
+  const r = await pool.query(`WITH updated AS (UPDATE versions SET status=$2 WHERE id=$1 RETURNING *) ${versionSelect.replace('FROM versions', 'FROM updated')}`, [req.params.id, nextStatus]);
   res.json({ version: r.rows[0] });
 }));

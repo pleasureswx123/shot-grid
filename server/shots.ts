@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { pool } from './db';
+import { isEntityLockedForNonAdmin } from './workflow';
 import { asyncHandler, readNumber, readString, requireProjectAccessFromRequest, requireProjectWriteAccess, requireProjectWriteAccessFromRequest, UUID_PATTERN } from './apiUtils';
 import { ensureShotStorageStructure, removeShotStorageStructure } from './storage';
 
@@ -124,8 +125,9 @@ shotsRouter.post('/bulk', asyncHandler(async (request, response) => {
 
 shotsRouter.patch('/:id', asyncHandler(async (request, response) => {
   const id = request.params.id; if (!UUID_PATTERN.test(id)) { response.status(400).json({ error: '镜头 ID 无效。' }); return; }
-  const access = await pool.query('SELECT project_id FROM shots WHERE id=$1', [id]); if (!access.rowCount) { response.status(404).json({ error: '镜头不存在。' }); return; }
+  const access = await pool.query('SELECT project_id,status FROM shots WHERE id=$1', [id]); if (!access.rowCount) { response.status(404).json({ error: '镜头不存在。' }); return; }
   if (!await requireProjectWriteAccess(access.rows[0].project_id, request.authUser!.id, request.authUser!.role)) { response.status(403).json({ error: '您不是该项目的成员。' }); return; }
+  if (isEntityLockedForNonAdmin(access.rows[0].status) && request.authUser!.role !== 'admin') { response.status(403).json({ error: '最终版已锁定，仅管理员可继续修改。' }); return; }
   let sceneId: string | null = null;
   const sceneCode = typeof request.body?.sceneCode === 'string' ? request.body.sceneCode.trim().toUpperCase() : '';
   if (sceneCode) {
@@ -136,4 +138,4 @@ shotsRouter.patch('/:id', asyncHandler(async (request, response) => {
   await pool.query(`UPDATE shots SET scene_id=coalesce($2,scene_id), assignee_id=coalesce($3,assignee_id), status=coalesce($4,status), description=coalesce($5,description) WHERE id=$1`, [id, sceneId, request.body?.assigneeId ?? null, request.body?.status ?? null, request.body?.description ?? null]);
   const result = await pool.query(`${selectShot} FROM shots sh JOIN scenes sc ON sc.id=sh.scene_id LEFT JOIN shot_assets sa ON sa.shot_id=sh.id WHERE sh.id=$1 GROUP BY sh.id, sc.scene_code`, [id]); response.json({ shot: result.rows[0] });
 }));
-shotsRouter.delete('/:id', asyncHandler(async (request, response) => { const id=request.params.id; const access=await pool.query('SELECT project_id FROM shots WHERE id=$1',[id]); if(!access.rowCount){response.status(404).json({error:'镜头不存在。'});return;} if(!await requireProjectWriteAccess(access.rows[0].project_id,request.authUser!.id,request.authUser!.role)){response.status(403).json({error:'您不是该项目的成员。'});return;} await pool.query('DELETE FROM shots WHERE id=$1',[id]); response.status(204).end(); }));
+shotsRouter.delete('/:id', asyncHandler(async (request, response) => { const id=request.params.id; const access=await pool.query('SELECT project_id,status FROM shots WHERE id=$1',[id]); if(!access.rowCount){response.status(404).json({error:'镜头不存在。'});return;} if(!await requireProjectWriteAccess(access.rows[0].project_id,request.authUser!.id,request.authUser!.role)){response.status(403).json({error:'您不是该项目的成员。'});return;} if(isEntityLockedForNonAdmin(access.rows[0].status)&&request.authUser!.role!=='admin'){response.status(403).json({error:'最终版已锁定，仅管理员可继续修改。'});return;} await pool.query('DELETE FROM shots WHERE id=$1',[id]); response.status(204).end(); }));
