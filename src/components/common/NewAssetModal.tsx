@@ -8,25 +8,31 @@ interface NewAssetModalProps {
 }
 
 export const NewAssetModal: React.FC<NewAssetModalProps> = ({ onClose }) => {
-  const { addAsset, currentUser } = useApp();
+  const { addAsset, currentUser, apiStatus } = useApp();
 
   const [name, setName] = useState<string>('逃生救生艇');
   const [category, setCategory] = useState<AssetCategory>('载具');
   const [thumbnailUrl, setThumbnailUrl] = useState<string>('https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80');
   const [description, setDescription] = useState<string>('双人高压逃生救生艇，拥有重型防爆装甲与脉冲发动机。');
   const [promptTemplate, setPromptTemplate] = useState<string>('Futuristic escape pod, sleek carbon fiber hull, glowing thrusters, sci-fi concept art --ar 2.39:1');
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    addAsset({
-      name,
-      category,
-      thumbnailUrl,
-      description,
-      promptTemplate,
-      assigneeId: currentUser.id
-    });
-    onClose();
+    setError(null);
+    try {
+      await addAsset({
+        name,
+        category,
+        thumbnailUrl,
+        description,
+        promptTemplate,
+        assigneeId: currentUser.id,
+      });
+      onClose();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : '保存资产失败。');
+    }
   };
 
   return (
@@ -43,6 +49,15 @@ export const NewAssetModal: React.FC<NewAssetModalProps> = ({ onClose }) => {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-3 text-xs">
+          {(error || apiStatus.error) && (
+            <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-2 text-rose-200">
+              {apiStatus.permissionDenied
+                ? '权限不足，无法新建资产。'
+                : apiStatus.conflict
+                  ? '保存冲突，请刷新后重试。'
+                  : error || apiStatus.error}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-slate-400 font-semibold block mb-1">资产名称</label>
@@ -112,9 +127,10 @@ export const NewAssetModal: React.FC<NewAssetModalProps> = ({ onClose }) => {
             </button>
             <button
               type="submit"
+              disabled={apiStatus.isSaving}
               className="px-5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-bold"
             >
-              创建资产并建立任务
+              {apiStatus.isSaving ? '保存中…' : '创建资产'}并建立任务
             </button>
           </div>
         </form>

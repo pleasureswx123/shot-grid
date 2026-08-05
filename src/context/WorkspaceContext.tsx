@@ -2,6 +2,8 @@ import React, {
   createContext, useCallback, useContext, useEffect, useMemo, useState
 } from 'react';
 import type { UserRole } from '../types';
+import { getErrorMessage } from '../utils/apiClient';
+import * as projectsApi from '../api/projects';
 
 const SELECTED_PROJECT_KEY = 'shotgrid_selected_project_id';
 
@@ -70,28 +72,6 @@ interface WorkspaceContextValue {
 
 const WorkspaceContext = createContext<WorkspaceContextValue | undefined>(undefined);
 
-const parseError = async (response: Response): Promise<string> => {
-  try {
-    const body = await response.json();
-    if (typeof body?.error === 'string') return body.error;
-  } catch {
-    // Ignore malformed error bodies.
-  }
-  return `请求失败（${response.status}）`;
-};
-
-const requestJson = async (url: string, init?: RequestInit) => {
-  const response = await fetch(url, {
-    credentials: 'same-origin',
-    ...init,
-    headers: init?.body
-      ? { 'Content-Type': 'application/json', ...init.headers }
-      : init?.headers,
-  });
-  if (!response.ok) throw new Error(await parseError(response));
-  if (response.status === 204) return null;
-  return response.json();
-};
 
 export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [projects, setProjects] = useState<ServerProject[]>([]);
@@ -114,8 +94,8 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setError(null);
     try {
       const [projectsBody, usersBody] = await Promise.all([
-        requestJson('/api/projects'),
-        requestJson('/api/users'),
+        projectsApi.listProjects(),
+        projectsApi.listUsers(),
       ]);
       const nextProjects: ServerProject[] = projectsBody.projects;
       setProjects(nextProjects);
@@ -129,7 +109,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (nextSelectedId) localStorage.setItem(SELECTED_PROJECT_KEY, nextSelectedId);
       else localStorage.removeItem(SELECTED_PROJECT_KEY);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '无法读取项目工作区。');
+      setError(getErrorMessage(requestError, '无法读取项目工作区。'));
     } finally {
       setIsLoading(false);
     }
@@ -149,10 +129,10 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setIsMembersLoading(true);
     setError(null);
     try {
-      const body = await requestJson(`/api/projects/${selectedProjectIdState}/members`);
+      const body = await projectsApi.listProjectMembers(selectedProjectIdState);
       setMembers(body.members);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : '无法读取项目成员。');
+      setError(getErrorMessage(requestError, '无法读取项目成员。'));
     } finally {
       setIsMembersLoading(false);
     }
@@ -163,27 +143,19 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, [refreshMembers]);
 
   const createProject = async (input: CreateProjectInput): Promise<void> => {
-    const body = await requestJson('/api/projects', {
-      method: 'POST',
-      body: JSON.stringify(input),
-    });
+    const body = await projectsApi.createProject(input);
     await loadWorkspace(body.project.id);
   };
 
   const addMember = async (userId: string, projectRole: UserRole): Promise<void> => {
     if (!selectedProjectIdState) throw new Error('请先选择项目。');
-    await requestJson(`/api/projects/${selectedProjectIdState}/members`, {
-      method: 'POST',
-      body: JSON.stringify({ userId, projectRole }),
-    });
+    await projectsApi.addProjectMember(selectedProjectIdState, userId, projectRole);
     await refreshMembers();
   };
 
   const removeMember = async (userId: string): Promise<void> => {
     if (!selectedProjectIdState) throw new Error('请先选择项目。');
-    await requestJson(`/api/projects/${selectedProjectIdState}/members/${userId}`, {
-      method: 'DELETE',
-    });
+    await projectsApi.removeProjectMember(selectedProjectIdState, userId);
     await refreshMembers();
   };
 

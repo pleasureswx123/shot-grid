@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import type { User, UserRole } from '../types';
+import { getErrorMessage, requestJson, readError } from '../utils/apiClient';
 
 interface SessionUserPayload {
   id: string;
@@ -45,15 +46,6 @@ const mapSessionUser = (user: SessionUserPayload): User => ({
   avatar: user.avatar || createFallbackAvatar(user.name),
 });
 
-const readError = async (response: Response): Promise<string> => {
-  try {
-    const body = await response.json();
-    if (typeof body?.error === 'string') return body.error;
-  } catch {
-    // The server may return an empty or non-JSON error response.
-  }
-  return `请求失败（${response.status}）`;
-};
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -78,7 +70,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       })
       .catch((requestError) => {
         if (requestError?.name !== 'AbortError') {
-          setError(requestError instanceof Error ? requestError.message : '无法连接服务器。');
+          setError(getErrorMessage(requestError));
         }
       })
       .finally(() => {
@@ -91,18 +83,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (email: string, password: string): Promise<void> => {
     setError(null);
     try {
-      const response = await fetch('/api/auth/login', {
+      const body = await requestJson<{ user: SessionUserPayload }>('/api/auth/login', {
         method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: { email, password },
       });
-
-      if (!response.ok) throw new Error(await readError(response));
-      const body = await response.json();
       setUser(mapSessionUser(body.user));
     } catch (requestError) {
-      const message = requestError instanceof Error ? requestError.message : '无法连接服务器。';
+      const message = getErrorMessage(requestError);
       setError(message);
       throw requestError;
     }
@@ -110,10 +97,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async (): Promise<void> => {
     try {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'same-origin',
-      });
+      await requestJson<void>('/api/auth/logout', { method: 'POST' });
     } finally {
       setUser(null);
     }

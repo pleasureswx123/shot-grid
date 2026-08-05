@@ -23,13 +23,13 @@ import { ImportAssetsModal } from './components/common/ImportAssetsModal';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { createFallbackAvatar } from './context/AuthContext';
 import { LoginView } from './components/auth/LoginView';
-import { Clapperboard, Loader2 } from 'lucide-react';
+import { AlertTriangle, Clapperboard, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { WorkspaceProvider, useWorkspace } from './context/WorkspaceContext';
 import { ProjectSetupView } from './components/project/ProjectSetupView';
 import type { Project, User } from './types';
 
 const AppContent: React.FC = () => {
-  const { activeTab } = useApp();
+  const { activeTab, apiStatus, clearApiStatus } = useApp();
 
   // Modal triggers
   const [showNewShotModal, setShowNewShotModal] = useState(false);
@@ -53,6 +53,33 @@ const AppContent: React.FC = () => {
         onOpenNewVersion={handleOpenNewVersion}
         onOpenImportExcel={() => setShowImportExcelModal(true)}
       />
+
+
+      {(apiStatus.isLoading || apiStatus.isSaving || apiStatus.error) && (
+        <div className="border-b border-slate-800 bg-slate-900/95 px-4 py-2 text-xs text-slate-200">
+          <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              {apiStatus.isLoading && <Loader2 className="h-4 w-4 animate-spin text-indigo-300" />}
+              {apiStatus.isSaving && <Loader2 className="h-4 w-4 animate-spin text-emerald-300" />}
+              {apiStatus.permissionDenied && <ShieldAlert className="h-4 w-4 text-amber-300" />}
+              {apiStatus.conflict && <RefreshCw className="h-4 w-4 text-orange-300" />}
+              {apiStatus.error && !apiStatus.permissionDenied && !apiStatus.conflict && <AlertTriangle className="h-4 w-4 text-rose-300" />}
+              <span>
+                {apiStatus.isLoading && '正在加载最新项目数据…'}
+                {apiStatus.isSaving && '正在保存，完成前不会更新本地数据…'}
+                {apiStatus.permissionDenied && `权限不足：${apiStatus.error}`}
+                {apiStatus.conflict && `保存冲突：${apiStatus.error} 请刷新后重试。`}
+                {apiStatus.error && !apiStatus.permissionDenied && !apiStatus.conflict && `保存失败：${apiStatus.error}`}
+              </span>
+            </div>
+            {apiStatus.error && (
+              <button onClick={clearApiStatus} className="rounded border border-slate-700 px-2 py-1 text-slate-300 hover:bg-slate-800">
+                关闭
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Main Layout Body */}
       <div className="flex-1 flex overflow-hidden">

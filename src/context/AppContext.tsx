@@ -9,6 +9,14 @@ import {
   mockTasks, mockVersions, mockNotes, mockReviewLists, mockFiles,
   mockChannels, mockChatMessages
 } from '../data/mockData';
+import { getErrorMessage, isAuthError, isConflictError } from '../utils/apiClient';
+import * as projectsApi from '../api/projects';
+import * as shotsApi from '../api/shots';
+import * as assetsApi from '../api/assets';
+import * as versionsApi from '../api/versions';
+import * as reviewsApi from '../api/reviews';
+import * as chatApi from '../api/chat';
+import * as tasksApi from '../api/tasks';
 
 export type MainTab = 'workbench' | 'project' | 'shots' | 'assets' | 'review' | 'files' | 'communication';
 
@@ -46,7 +54,7 @@ interface AppContextType {
   ) => void;
   deleteShot: (shotId: string) => void;
   deleteShots: (shotIds: string[]) => void;
-  addAsset: (assetData: Partial<Asset>) => void;
+  addAsset: (assetData: Partial<Asset>) => Promise<void>;
   importAssetsFromData: (importedAssets: ImportedAssetData[]) => {
     createdCount: number;
     skippedCount: number;
@@ -63,6 +71,8 @@ interface AppContextType {
   toggleLikeMessage: (messageId: string, userId: string) => Promise<void>;
   createDepartmentChannel: (channel: Omit<DepartmentChannel, 'id' | 'unreadCount'>) => Promise<DepartmentChannel>;
   refreshChatMessages: (channelId?: string, options?: { before?: string; append?: boolean }) => Promise<void>;
+  apiStatus: { isLoading: boolean; isSaving: boolean; error: string | null; permissionDenied: boolean; conflict: boolean };
+  clearApiStatus: () => void;
   resetToDefaultData: () => void;
 }
 
@@ -411,32 +421,6 @@ const sanitizeProjectState = (
 const readInitialProjectState = (project: Project): ProjectLocalState =>
   normalizeScenesAndTasks(project, createDefaultProjectState(project));
 
-const parseApiError = async (response: Response, fallback: string): Promise<string> => {
-  try {
-    const body = await response.json();
-    if (typeof body?.error === 'string') return body.error;
-  } catch {
-    // Keep fallback message.
-  }
-  return fallback;
-};
-
-const apiRequest = async <T,>(path: string, options: RequestInit = {}): Promise<T> => {
-  const response = await fetch(path, {
-    credentials: 'same-origin',
-    ...options,
-    headers: {
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...options.headers,
-    },
-  });
-  if (!response.ok) {
-    throw new Error(await parseApiError(response, `服务端请求失败（${response.status}）`));
-  }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
-};
-
 
 export const createShotPipelineTasks = (
   shotId: string,
@@ -533,12 +517,34 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   const [files, setFiles] = useState<ProjectFile[]>(initialLocalState.files);
   const [channels, setChannels] = useState<DepartmentChannel[]>(initialLocalState.channels);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(initialLocalState.chatMessages);
+  const [apiStatus, setApiStatus] = useState({
+    isLoading: false,
+    isSaving: false,
+    error: null as string | null,
+    permissionDenied: false,
+    conflict: false,
+  });
 
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [selectedReviewListId, setSelectedReviewListId] = useState<string | null>(
     initialLocalState.reviewLists[0]?.id || null,
   );
+
+  const clearApiStatus = useCallback(() => {
+    setApiStatus({ isLoading: false, isSaving: false, error: null, permissionDenied: false, conflict: false });
+  }, []);
+
+  const reportApiError = useCallback((error: unknown, fallback: string) => {
+    setApiStatus(previous => ({
+      ...previous,
+      isLoading: false,
+      isSaving: false,
+      error: getErrorMessage(error, fallback),
+      permissionDenied: isAuthError(error),
+      conflict: isConflictError(error),
+    }));
+  }, []);
 
   useEffect(() => {
     setProject(previous => ({
@@ -574,7 +580,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
     params.set('limit', '50');
     if (options.before) params.set('before', options.before);
 
-    const body = await apiRequest<{ chatMessages: ChatMessage[] }>(`/api/chat/messages?${params.toString()}`);
+    const body = await chatApi.listMessages(params);
     setChatMessages(prev => {
       if (!options.append) {
         const channelFilter = channelId ? (message: ChatMessage) => message.channelId !== channelId : () => false;
@@ -587,19 +593,20 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   }, [project.id]);
 
   const refreshProjectData = async (): Promise<void> => {
-    const query = `projectId=${encodeURIComponent(project.id)}`;
+    setApiStatus(previous => ({ ...previous, isLoading: true, error: null, permissionDenied: false, conflict: false }));
+    const messageParams = new URLSearchParams({ projectId: project.id, limit: '50' });
     const [sceneBody, shotBody, assetBody, taskBody, versionBody, reviewBody, channelBody, messageBody] = await Promise.all([
-      apiRequest<{ scenes: Scene[] }>(`/api/scenes?${query}`),
-      apiRequest<{ shots: Shot[] }>(`/api/shots?${query}`),
-      apiRequest<{ assets: Asset[] }>(`/api/assets?${query}`),
-      apiRequest<{ tasks: Task[] }>(`/api/tasks?${query}`),
-      apiRequest<{ versions: Version[] }>(`/api/projects/${project.id}/versions`),
-      apiRequest<{ reviewLists: ReviewList[] }>(`/api/projects/${project.id}/review-lists`),
-      apiRequest<{ channels: DepartmentChannel[] }>(`/api/chat/channels?${query}`),
-      apiRequest<{ chatMessages: ChatMessage[] }>(`/api/chat/messages?${query}&limit=50`),
+      shotsApi.listScenes(project.id),
+      shotsApi.listShots(project.id),
+      assetsApi.listAssets(project.id),
+      tasksApi.listTasks(project.id),
+      versionsApi.listVersions(project.id),
+      reviewsApi.listReviewLists(project.id),
+      chatApi.listChannels(project.id),
+      chatApi.listMessages(messageParams),
     ]);
     const noteBodies = await Promise.all(versionBody.versions.map(version =>
-      apiRequest<{ notes: Note[] }>(`/api/versions/${version.id}/notes`)
+      versionsApi.listVersionNotes(version.id)
     ));
     setScenes(sceneBody.scenes);
     setShots(shotBody.shots);
@@ -612,12 +619,16 @@ export const AppProvider: React.FC<AppProviderProps> = ({
     setChannels(channelBody.channels);
     setChatMessages(messageBody.chatMessages);
     updateProjectMetrics(shotBody.shots);
+    setApiStatus(previous => ({ ...previous, isLoading: false }));
   };
 
   useEffect(() => {
     if (IS_DEMO_MODE && initialProject.code === mockProject.code) return;
-    refreshProjectData().catch(error => console.warn('Failed to load project data:', error));
-  }, [project.id, initialProject.code]);
+    refreshProjectData().catch(error => {
+      reportApiError(error, '加载项目数据失败。');
+      console.warn('Failed to load project data:', error);
+    });
+  }, [project.id, initialProject.code, reportApiError]);
 
 
   // Recalculate project shot metrics
@@ -631,21 +642,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   const ensureShotDirectories = async (
     shotEntries: Array<{ shotId: string; shotCode: string; sceneCode: string }>,
   ): Promise<void> => {
-    const response = await fetch(`/api/projects/${project.id}/storage/shots`, {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ shots: shotEntries }),
-    });
-    if (response.ok) return;
-    let message = `无法创建镜头目录（${response.status}）`;
-    try {
-      const body = await response.json();
-      if (typeof body?.error === 'string') message = body.error;
-    } catch {
-      // Keep the HTTP fallback message.
-    }
-    throw new Error(message);
+    await projectsApi.ensureShotDirectories(project.id, shotEntries);
   };
 
   // Add Shot with Pipeline Task Template
@@ -654,12 +651,17 @@ export const AppProvider: React.FC<AppProviderProps> = ({
       .trim()
       .toUpperCase();
     const sceneCode = normalizeSceneCode(shotData.sceneCode);
-    const body = await apiRequest<{ shot: Shot }>('/api/shots', {
-      method: 'POST',
-      body: JSON.stringify({ ...shotData, projectId: project.id, shotCode, sceneCode }),
-    });
-    await ensureShotDirectories([{ shotId: body.shot.id, shotCode, sceneCode }]);
-    await refreshProjectData();
+    setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
+    try {
+      const body = await shotsApi.createShot({ ...shotData, projectId: project.id, shotCode, sceneCode });
+      await ensureShotDirectories([{ shotId: body.shot.id, shotCode, sceneCode }]);
+      await refreshProjectData();
+    } catch (error) {
+      reportApiError(error, '保存镜头失败。');
+      throw error;
+    } finally {
+      setApiStatus(previous => ({ ...previous, isSaving: false }));
+    }
   };
 
 
@@ -733,7 +735,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
 
   const deleteShots = async (shotIds: string[]) => {
     if (currentUser.role !== 'admin' && currentUser.role !== 'director') return;
-    await Promise.all(shotIds.map(shotId => apiRequest<void>(`/api/shots/${shotId}`, { method: 'DELETE' })));
+    await Promise.all(shotIds.map(shotId => shotsApi.deleteShot(shotId)));
     await refreshProjectData();
   };
 
@@ -742,11 +744,16 @@ export const AppProvider: React.FC<AppProviderProps> = ({
 
   // Add Asset with Pipeline Task Template
   const addAsset = async (assetData: Partial<Asset>) => {
-    await apiRequest<{ asset: Asset }>('/api/assets', {
-      method: 'POST',
-      body: JSON.stringify({ ...assetData, projectId: project.id }),
-    });
-    await refreshProjectData();
+    setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
+    try {
+      await assetsApi.createAsset({ ...assetData, projectId: project.id });
+      await refreshProjectData();
+    } catch (error) {
+      reportApiError(error, '保存资产失败。');
+      throw error;
+    } finally {
+      setApiStatus(previous => ({ ...previous, isSaving: false }));
+    }
   };
 
 
@@ -822,28 +829,23 @@ export const AppProvider: React.FC<AppProviderProps> = ({
       formData.append('entityType', task.entityType);
       formData.append('entityId', task.entityId);
     }
-    const response = await fetch('/api/files/upload', { method: 'POST', credentials: 'same-origin', body: formData });
-    if (!response.ok) throw new Error(await parseApiError(response, `文件上传失败（${response.status}）`));
-    const body = await response.json() as { file: ProjectFile };
+    const body = await versionsApi.uploadVersionFile(formData);
     return body.file;
   };
 
   // Add new Version
   const addVersion = async (versionData: Omit<Version, 'id' | 'createdAt'>) => {
-    await apiRequest<{ version: Version }>('/api/versions', {
-      method: 'POST',
-      body: JSON.stringify(versionData),
-    });
+    await versionsApi.createVersion(versionData);
     await refreshProjectData();
   };
 
 
   // Approve / Reject / Update Version Status
   const updateVersionStatus = (versionId: string, status: VersionStatus) => {
-    void apiRequest<{ version: Version }>(`/api/versions/${versionId}/status`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status }),
-    }).catch(error => console.warn('Failed to update version status:', error));
+    void versionsApi.updateVersionStatus(versionId, status).catch(error => {
+      reportApiError(error, '更新版本状态失败，已回滚本地状态。');
+      void refreshProjectData();
+    });
     const version = versions.find(v => v.id === versionId);
     if (!version) return;
 
@@ -915,10 +917,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
 
   // Add Note
   const addNote = async (noteData: Omit<Note, 'id' | 'createdAt'>) => {
-    const body = await apiRequest<{ note: Note }>(`/api/versions/${noteData.versionId}/notes`, {
-      method: 'POST',
-      body: JSON.stringify(noteData),
-    });
+    const body = await versionsApi.createVersionNote(noteData);
     setNotes(previous => [body.note, ...previous.filter(note => note.id !== body.note.id)]);
   };
 
@@ -930,21 +929,16 @@ export const AppProvider: React.FC<AppProviderProps> = ({
 
   // Create Review List (Playlist)
   const createReviewList = async (title: string, date: string, versionIds: string[], description?: string) => {
-    const body = await apiRequest<{ reviewList: ReviewList }>(`/api/projects/${project.id}/review-lists`, {
-      method: 'POST',
-      body: JSON.stringify({ title, date, versionIds, description }),
-    });
+    const body = await reviewsApi.createReviewList(project.id, { title, date, versionIds, description });
     setReviewLists(prev => [body.reviewList, ...prev.filter(item => item.id !== body.reviewList.id)]);
     setSelectedReviewListId(body.reviewList.id);
   };
 
   // Batch import shots from parsed Excel / CSV array
   const importShotsFromData = async (importedData: Array<{ sceneCode: string; shotCode: string; description: string; durationSec: number; shotType: string; cameraMovement: string; assetNames?: string }>): Promise<void> => {
-    const body = await apiRequest<{ scenes: Scene[]; shots: Shot[]; tasks: Task[] }>('/api/shots/bulk', {
-      method: 'POST',
-      body: JSON.stringify({
-        projectId: project.id,
-        shots: importedData.map((item, index) => ({
+    const body = await shotsApi.bulkCreateShots({
+      projectId: project.id,
+      shots: importedData.map((item, index) => ({
           sceneCode: normalizeSceneCode(item.sceneCode),
           shotCode: (item.shotCode || `SH${String(shots.length + index + 1).padStart(3, '0')}`)
             .trim()
@@ -954,8 +948,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
           shotType: item.shotType || '中景',
           cameraMovement: item.cameraMovement || '固定镜头',
           assigneeId: currentUser.id,
-        })),
-      }),
+      })),
     });
 
     const sceneMap = new Map<string, Scene>(scenes.map(scene => [scene.id, scene]));
@@ -986,28 +979,20 @@ export const AppProvider: React.FC<AppProviderProps> = ({
 
   // Communication Methods
   const sendChatMessage = async (msgData: Omit<ChatMessage, 'id' | 'createdAt'>) => {
-    const body = await apiRequest<{ message: ChatMessage }>('/api/chat/messages', {
-      method: 'POST',
-      body: JSON.stringify(msgData),
-    });
+    const body = await chatApi.createMessage(msgData);
     setChatMessages(prev => [...prev, body.message]);
   };
 
 
   const updateChatMessageMedia = async (messageId: string, editedMediaUrl: string) => {
-    await apiRequest<void>(`/api/chat/messages/${messageId}/media`, {
-      method: 'PATCH',
-      body: JSON.stringify({ editedMediaUrl }),
-    });
+    await chatApi.updateMessageMedia(messageId, editedMediaUrl);
     setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, editedMediaUrl } : m));
   };
 
   const toggleLikeMessage = async (messageId: string, userId: string) => {
     const message = chatMessages.find(item => item.id === messageId);
     const liked = Boolean(message?.likes?.includes(userId));
-    await apiRequest<void>(`/api/chat/messages/${messageId}/likes`, {
-      method: liked ? 'DELETE' : 'POST',
-    });
+    await chatApi.likeMessage(messageId, liked);
     setChatMessages(prev => prev.map(m => {
       if (m.id === messageId) {
         const likes = m.likes || [];
@@ -1021,10 +1006,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   };
 
   const createDepartmentChannel = async (channelData: Omit<DepartmentChannel, 'id' | 'unreadCount'>) => {
-    const body = await apiRequest<{ channel: DepartmentChannel }>(`/api/chat/channels?projectId=${encodeURIComponent(project.id)}`, {
-      method: 'POST',
-      body: JSON.stringify({ ...channelData, projectId: project.id }),
-    });
+    const body = await chatApi.createChannel(project.id, channelData);
     setChannels(prev => [...prev, body.channel]);
     return body.channel;
   };
@@ -1090,6 +1072,8 @@ export const AppProvider: React.FC<AppProviderProps> = ({
         toggleLikeMessage,
         createDepartmentChannel,
         refreshChatMessages,
+        apiStatus,
+        clearApiStatus,
         resetToDefaultData
       }}
     >
