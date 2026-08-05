@@ -15,9 +15,12 @@
     "db:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/postgres.ps1 stop",
     "db:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/postgres.ps1 status",
     "verify:files": "node scripts/verify-file-api.mjs",
-    "test": "tsx --test server/security.test.ts server/permissions.test.ts server/storage.test.ts server/entityValidation.test.ts src/context/projectState.test.ts src/utils/assetImport.test.ts",
+    "test": "npm run test:unit",
     "preview": "vite preview",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:unit": "tsx --test server/security.test.ts server/permissions.test.ts server/storage.test.ts server/entityValidation.test.ts src/context/projectState.test.ts src/utils/assetImport.test.ts",
+    "test:server": "tsx --test server/routes.integration.test.ts",
+    "test:integration": "npm run test:server"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
