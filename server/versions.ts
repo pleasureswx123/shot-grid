@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Router } from 'express';
+import { Response, Router } from 'express';
 import { pool } from './db';
 import { asyncHandler, readString, requireProjectAccessFromRequest, UUID_PATTERN } from './apiUtils';
 import { validateEntityBelongsToProject } from './entityValidation';
@@ -14,6 +14,27 @@ export const versionSelect = `SELECT id, task_id AS "taskId", entity_type AS "en
 const normalizeFileUrl = (fileId: unknown, fileUrl: unknown) => {
   if (typeof fileId === 'string' && UUID_PATTERN.test(fileId)) return `/api/files/${fileId}/content`;
   return readString(fileUrl);
+};
+
+const APPROVAL_STATUSES = new Set(['已通过', '最终版']);
+
+const getBlockingMandatoryNotes = async (versionId: string, query = pool.query.bind(pool)) => {
+  const result = await query(
+    `SELECT id FROM notes WHERE version_id=$1 AND is_mandatory=true AND status='待处理' ORDER BY created_at ASC`,
+    [versionId],
+  );
+  return result.rows.map(row => String(row.id));
+};
+
+const respondWithBlockingMandatoryNotes = (res: Response, noteIds: string[]) => {
+  res.status(409).json({
+    error: '仍有必改意见未解决，无法通过版本。',
+    code: 'UNRESOLVED_MANDATORY_NOTES',
+    details: {
+      unresolvedMandatoryCount: noteIds.length,
+      noteIds,
+    },
+  });
 };
 
 versionsRouter.get('/', asyncHandler(async (req, res) => {
@@ -71,6 +92,13 @@ versionsRouter.patch('/:id/status', asyncHandler(async (req, res) => {
     res.status(400).json({ error: error instanceof Error ? error.message : '版本状态流转无效。' });
     return;
   }
+  if (APPROVAL_STATUSES.has(nextStatus)) {
+    const blockingNoteIds = await getBlockingMandatoryNotes(req.params.id);
+    if (blockingNoteIds.length > 0) {
+      respondWithBlockingMandatoryNotes(res, blockingNoteIds);
+      return;
+    }
+  }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -106,6 +134,13 @@ versionsRouter.patch('/:id', asyncHandler(async (req, res) => {
   const requestedStatus = typeof req.body?.status === 'string' ? req.body.status.trim() : a.rows[0].status;
   let nextStatus;
   try { nextStatus = assertVersionStatusTransition(a.rows[0].status, requestedStatus); } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : '版本状态流转无效。' }); return; }
+  if (APPROVAL_STATUSES.has(nextStatus)) {
+    const blockingNoteIds = await getBlockingMandatoryNotes(req.params.id);
+    if (blockingNoteIds.length > 0) {
+      respondWithBlockingMandatoryNotes(res, blockingNoteIds);
+      return;
+    }
+  }
   const r = await pool.query(`WITH updated AS (UPDATE versions SET status=$2 WHERE id=$1 RETURNING *) ${versionSelect.replace('FROM versions', 'FROM updated')}`, [req.params.id, nextStatus]);
   res.json({ version: r.rows[0] });
 }));

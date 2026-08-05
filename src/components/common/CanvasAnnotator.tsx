@@ -7,13 +7,15 @@ interface CanvasAnnotatorProps {
   height: number;
   onSaveAnnotation: (dataUrl: string, annotations: NoteAnnotation[]) => void;
   onClear: () => void;
+  noteKind?: 'mandatory' | 'normal';
 }
 
 export const CanvasAnnotator: React.FC<CanvasAnnotatorProps> = ({
   width,
   height,
   onSaveAnnotation,
-  onClear
+  onClear,
+  noteKind = 'mandatory'
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -164,7 +166,10 @@ export const CanvasAnnotator: React.FC<CanvasAnnotatorProps> = ({
       />
 
       {/* Floating Canvas Toolbar */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-slate-900/90 border border-slate-700/80 backdrop-blur-md rounded-full px-3 py-1.5 flex items-center space-x-3 text-xs shadow-xl select-none">
+      <div className={`absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-slate-900/90 backdrop-blur-md rounded-full px-3 py-1.5 flex items-center space-x-3 text-xs shadow-xl select-none ${noteKind === 'mandatory' ? 'border-rose-500/70' : 'border-slate-700/80'}`}>
+        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${noteKind === 'mandatory' ? 'bg-rose-500/20 text-rose-200' : 'bg-slate-700 text-slate-300'}`}>
+          {noteKind === 'mandatory' ? '必改意见标注' : '普通意见标注'}
+        </span>
         <div className="flex items-center space-x-1">
           <button
             onClick={() => setTool('brush')}

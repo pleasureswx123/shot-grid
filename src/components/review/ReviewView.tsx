@@ -1,17 +1,18 @@
 import React, { useState, useRef } from 'react';
+import { ApiError } from '../../utils/apiClient';
 import { useApp } from '../../context/AppContext';
 import {
   Play, Pause, Clock, CheckCircle2, XCircle, RotateCcw,
   Sparkles, Layers, Sliders, ChevronRight, Plus, Eye,
   Copy, FileVideo, MessageSquare
 } from 'lucide-react';
-import type { NoteAnnotation } from '../../types';
+import type { NoteAnnotation, VersionStatus } from '../../types';
 import { CanvasAnnotator } from '../common/CanvasAnnotator';
 
 export const ReviewView: React.FC = () => {
   const {
     currentUser, reviewLists, selectedReviewListId, setSelectedReviewListId,
-    versions, shots, notes, updateVersionStatus, addNote, createReviewList
+    versions, shots, notes, updateVersionStatus, addNote, createReviewList, apiStatus
   } = useApp();
 
   const currentPlaylist = reviewLists.find(rl => rl.id === selectedReviewListId) || reviewLists[0];
@@ -23,6 +24,7 @@ export const ReviewView: React.FC = () => {
   const activeVersion = displayVersions[activeVersionIndex] || displayVersions[0];
   const activeShot = shots.find(s => s.id === activeVersion?.entityId);
   const activeNotes = notes.filter(n => n.versionId === activeVersion?.id);
+  const unresolvedMandatoryNotes = activeNotes.filter(n => n.isMandatory && n.status === '待处理');
 
   // Compare mode: 'single' | 'ab_compare'
   const [reviewMode, setReviewMode] = useState<'single' | 'ab_compare'>('single');
@@ -39,6 +41,7 @@ export const ReviewView: React.FC = () => {
 
   // New Note state
   const [newNoteText, setNewNoteText] = useState('');
+  const [approvalBlockMessage, setApprovalBlockMessage] = useState<string | null>(null);
   const [isMandatory, setIsMandatory] = useState(true);
   const [lastAnnotationData, setLastAnnotationData] = useState<string | null>(null);
   const [lastAnnotations, setLastAnnotations] = useState<NoteAnnotation[]>([]);
@@ -62,6 +65,20 @@ export const ReviewView: React.FC = () => {
       if (!isPlaying) {
         videoRef.current.play();
         setIsPlaying(true);
+      }
+    }
+  };
+
+  const handleUpdateVersionStatus = async (status: VersionStatus) => {
+    if (!activeVersion) return;
+    setApprovalBlockMessage(null);
+    try {
+      await updateVersionStatus(activeVersion.id, status);
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'UNRESOLVED_MANDATORY_NOTES') {
+        const details = error.details as { unresolvedMandatoryCount?: number; noteIds?: string[] } | undefined;
+        const count = details?.unresolvedMandatoryCount ?? unresolvedMandatoryNotes.length;
+        setApprovalBlockMessage(`仍有必改意见未解决（${count} 条），请先处理后再通过。`);
       }
     }
   };
@@ -246,6 +263,7 @@ export const ReviewView: React.FC = () => {
                 <CanvasAnnotator
                   width={800}
                   height={450}
+                  noteKind={isMandatory ? 'mandatory' : 'normal'}
                   onSaveAnnotation={(dataUrl, annotations) => {
                     setLastAnnotationData(dataUrl);
                     setLastAnnotations(annotations);
@@ -347,7 +365,7 @@ export const ReviewView: React.FC = () => {
                   onChange={e => setIsMandatory(e.target.checked)}
                   className="rounded bg-slate-900 text-indigo-600"
                 />
-                <span>必须修改</span>
+                <span className={isMandatory ? 'text-rose-300 font-semibold' : 'text-slate-400'}>{isMandatory ? '必改意见' : '普通意见'}</span>
               </label>
               <button
                 onClick={handleAddNote}
@@ -378,6 +396,9 @@ export const ReviewView: React.FC = () => {
                   </span>
                 </div>
                 <p className="text-slate-200 leading-relaxed">{n.content}</p>
+                {n.isMandatory && n.status === '待处理' && (
+                  <p className="text-[10px] font-semibold text-rose-300">仍有必改意见未解决</p>
+                )}
                 <div className="text-[10px] text-slate-500 text-right">{n.createdAt}</div>
               </div>
             ))}
@@ -407,8 +428,13 @@ export const ReviewView: React.FC = () => {
           </div>
 
           <div className="flex items-center space-x-3">
+            {(approvalBlockMessage || (apiStatus.conflict && apiStatus.error?.includes('必改'))) && (
+              <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-semibold text-rose-200">
+                {approvalBlockMessage || '仍有必改意见未解决'}
+              </div>
+            )}
             <button
-              onClick={() => updateVersionStatus(activeVersion.id, '已退回')}
+              onClick={() => handleUpdateVersionStatus('已退回')}
               className="px-4 py-2 bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/30 rounded-lg text-xs font-bold transition flex items-center space-x-1.5"
             >
               <XCircle className="w-4 h-4" />
@@ -416,14 +442,14 @@ export const ReviewView: React.FC = () => {
             </button>
 
             <button
-              onClick={() => updateVersionStatus(activeVersion.id, '待审核')}
+              onClick={() => handleUpdateVersionStatus('待审核')}
               className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg text-xs font-semibold transition"
             >
               稍后决定
             </button>
 
             <button
-              onClick={() => updateVersionStatus(activeVersion.id, '已通过')}
+              onClick={() => handleUpdateVersionStatus('已通过')}
               className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition flex items-center space-x-1.5 shadow-lg shadow-indigo-600/30"
             >
               <CheckCircle2 className="w-4 h-4" />
@@ -431,7 +457,7 @@ export const ReviewView: React.FC = () => {
             </button>
 
             <button
-              onClick={() => updateVersionStatus(activeVersion.id, '最终版')}
+              onClick={() => handleUpdateVersionStatus('最终版')}
               className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-black transition flex items-center space-x-1.5 shadow-lg shadow-emerald-600/30"
             >
               <Sparkles className="w-4 h-4" />

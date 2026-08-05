@@ -54,6 +54,17 @@ maybeDescribe('server API integration routes', () => {
     return { response, data };
   };
 
+
+  const createReviewVersion = async () => {
+    const asset = await request('POST', '/api/assets', ids.creator, { projectId: ids.project, name: `审核资产 ${Date.now()} ${Math.random()}`, category: '道具' });
+    assert.equal(asset.response.status, 201);
+    const task = await request('POST', '/api/tasks', ids.creator, { projectId: ids.project, entityType: 'asset', entityId: asset.data.asset.id, title: '审核任务', pipelineStage: '概念设计' });
+    assert.equal(task.response.status, 201);
+    const version = await request('POST', '/api/versions', ids.creator, { taskId: task.data.task.id, versionNumber: 'V001', fileUrl: 'https://example.test/review.png', fileType: 'image', changelog: '首版' });
+    assert.equal(version.response.status, 201);
+    return version.data.version.id as string;
+  };
+
   const insertUser = async (id: string, role: string, email: string) => {
     await pool.query(
       `INSERT INTO users (id, name, email, password_hash, role, department, is_active)
@@ -177,6 +188,40 @@ maybeDescribe('server API integration routes', () => {
     const message = await request('POST', '/api/chat/messages', ids.creator, { channelId: createdChannelId, content: '提交审核' });
     assert.equal(message.response.status, 201);
     assert.equal(message.data.message.content, '提交审核');
+  });
+
+  test('blocks approving versions with unresolved mandatory notes', async () => {
+    const versionId = await createReviewVersion();
+    const note = await request('POST', `/api/versions/${versionId}/notes`, ids.client, { content: '必须修正构图', isMandatory: true });
+    assert.equal(note.response.status, 201);
+
+    const blocked = await request('PATCH', `/api/versions/${versionId}/status`, ids.client, { status: '已通过' });
+    assert.equal(blocked.response.status, 409);
+    assert.equal(blocked.data.code, 'UNRESOLVED_MANDATORY_NOTES');
+    assert.equal(blocked.data.details.unresolvedMandatoryCount, 1);
+    assert.deepEqual(blocked.data.details.noteIds, [note.data.note.id]);
+  });
+
+  test('allows approving versions after all mandatory notes are resolved', async () => {
+    const versionId = await createReviewVersion();
+    const note = await request('POST', `/api/versions/${versionId}/notes`, ids.client, { content: '必须修正颜色', isMandatory: true });
+    assert.equal(note.response.status, 201);
+    const resolved = await request('PATCH', `/api/notes/${note.data.note.id}`, ids.creator, { status: '已解决' });
+    assert.equal(resolved.response.status, 200);
+
+    const approved = await request('PATCH', `/api/versions/${versionId}/status`, ids.client, { status: '已通过' });
+    assert.equal(approved.response.status, 200);
+    assert.equal(approved.data.version.status, '已通过');
+  });
+
+  test('allows approving versions with unresolved normal notes', async () => {
+    const versionId = await createReviewVersion();
+    const note = await request('POST', `/api/versions/${versionId}/notes`, ids.client, { content: '可以考虑更亮', isMandatory: false });
+    assert.equal(note.response.status, 201);
+
+    const approved = await request('PATCH', `/api/versions/${versionId}/status`, ids.client, { status: '已通过' });
+    assert.equal(approved.response.status, 200);
+    assert.equal(approved.data.version.status, '已通过');
   });
 
   test('rejects invalid upload entityType, oversized upload, and deleting another creator file', async () => {
