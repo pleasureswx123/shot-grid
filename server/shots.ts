@@ -126,7 +126,14 @@ shotsRouter.patch('/:id', asyncHandler(async (request, response) => {
   const id = request.params.id; if (!UUID_PATTERN.test(id)) { response.status(400).json({ error: '镜头 ID 无效。' }); return; }
   const access = await pool.query('SELECT project_id FROM shots WHERE id=$1', [id]); if (!access.rowCount) { response.status(404).json({ error: '镜头不存在。' }); return; }
   if (!await requireProjectWriteAccess(access.rows[0].project_id, request.authUser!.id, request.authUser!.role)) { response.status(403).json({ error: '您不是该项目的成员。' }); return; }
-  await pool.query(`UPDATE shots SET assignee_id=coalesce($2,assignee_id), status=coalesce($3,status), description=coalesce($4,description) WHERE id=$1`, [id, request.body?.assigneeId ?? null, request.body?.status ?? null, request.body?.description ?? null]);
+  let sceneId: string | null = null;
+  const sceneCode = typeof request.body?.sceneCode === 'string' ? request.body.sceneCode.trim().toUpperCase() : '';
+  if (sceneCode) {
+    if (!/^[A-Z0-9._-]{1,40}$/.test(sceneCode)) { response.status(400).json({ error: '场次编号无效。' }); return; }
+    const scene = await pool.query(`INSERT INTO scenes (id, project_id, scene_code, name, description) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (project_id, scene_code) DO UPDATE SET scene_code = EXCLUDED.scene_code RETURNING id`, [randomUUID(), access.rows[0].project_id, sceneCode, `场次 ${sceneCode}`, '批量编辑创建的场次']);
+    sceneId = scene.rows[0].id;
+  }
+  await pool.query(`UPDATE shots SET scene_id=coalesce($2,scene_id), assignee_id=coalesce($3,assignee_id), status=coalesce($4,status), description=coalesce($5,description) WHERE id=$1`, [id, sceneId, request.body?.assigneeId ?? null, request.body?.status ?? null, request.body?.description ?? null]);
   const result = await pool.query(`${selectShot} FROM shots sh JOIN scenes sc ON sc.id=sh.scene_id LEFT JOIN shot_assets sa ON sa.shot_id=sh.id WHERE sh.id=$1 GROUP BY sh.id, sc.scene_code`, [id]); response.json({ shot: result.rows[0] });
 }));
 shotsRouter.delete('/:id', asyncHandler(async (request, response) => { const id=request.params.id; const access=await pool.query('SELECT project_id FROM shots WHERE id=$1',[id]); if(!access.rowCount){response.status(404).json({error:'镜头不存在。'});return;} if(!await requireProjectWriteAccess(access.rows[0].project_id,request.authUser!.id,request.authUser!.role)){response.status(403).json({error:'您不是该项目的成员。'});return;} await pool.query('DELETE FROM shots WHERE id=$1',[id]); response.status(204).end(); }));

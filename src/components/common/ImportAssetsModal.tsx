@@ -90,17 +90,21 @@ export const ImportAssetsModal: React.FC<ImportAssetsModalProps> = ({ onClose })
     event.target.value = '';
   };
 
-  const handleConfirmImport = () => {
+  const handleConfirmImport = async () => {
     if (!importableRows.length) return;
-    importAssetsFromData(importableRows.map(row => ({
-      name: row.name,
-      category: row.category,
-      description: row.description,
-      promptTemplate: row.promptTemplate,
-      thumbnailUrl: row.thumbnailUrl,
-      assignee: row.assignee,
-    })));
-    onClose();
+    try {
+      await importAssetsFromData(importableRows.map(row => ({
+        name: row.name,
+        category: row.category,
+        description: row.description,
+        promptTemplate: row.promptTemplate,
+        thumbnailUrl: row.thumbnailUrl,
+        assignee: row.assignee,
+      })));
+      onClose();
+    } catch (error) {
+      console.error('Failed to import assets:', error);
+    }
   };
 
   return (

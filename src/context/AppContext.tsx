@@ -17,6 +17,7 @@ import * as versionsApi from '../api/versions';
 import * as reviewsApi from '../api/reviews';
 import * as chatApi from '../api/chat';
 import * as tasksApi from '../api/tasks';
+import * as filesApi from '../api/files';
 
 export type MainTab = 'workbench' | 'project' | 'shots' | 'assets' | 'review' | 'files' | 'communication';
 
@@ -51,19 +52,19 @@ interface AppContextType {
   updateShots: (
     shotIds: string[],
     updates: Partial<Pick<Shot, 'sceneCode' | 'assigneeId' | 'status'>>,
-  ) => void;
-  deleteShot: (shotId: string) => void;
-  deleteShots: (shotIds: string[]) => void;
+  ) => Promise<void>;
+  deleteShot: (shotId: string) => Promise<void>;
+  deleteShots: (shotIds: string[]) => Promise<void>;
   addAsset: (assetData: Partial<Asset>) => Promise<void>;
-  importAssetsFromData: (importedAssets: ImportedAssetData[]) => {
+  importAssetsFromData: (importedAssets: ImportedAssetData[]) => Promise<{
     createdCount: number;
     skippedCount: number;
-  };
+  }>;
   addVersion: (versionData: Omit<Version, 'id' | 'createdAt'>) => Promise<void>;
   uploadVersionFile: (file: File, metadata: { taskId: string; versionNumber: string; fileType: 'video' | 'image' }) => Promise<ProjectFile>;
-  updateVersionStatus: (versionId: string, status: VersionStatus) => void;
+  updateVersionStatus: (versionId: string, status: VersionStatus) => Promise<void>;
   addNote: (noteData: Omit<Note, 'id' | 'createdAt'>) => Promise<void>;
-  updateTaskStatus: (taskId: string, status: TaskStatus) => void;
+  updateTaskStatus: (taskId: string, status: TaskStatus) => Promise<void>;
   createReviewList: (title: string, date: string, versionIds: string[], description?: string) => Promise<void>;
   importShotsFromData: (importedShots: Array<{ sceneCode: string; shotCode: string; description: string; durationSec: number; shotType: string; cameraMovement: string; assetNames?: string }>) => Promise<void>;
   sendChatMessage: (msg: Omit<ChatMessage, 'id' | 'createdAt'>) => Promise<void>;
@@ -595,7 +596,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   const refreshProjectData = async (): Promise<void> => {
     setApiStatus(previous => ({ ...previous, isLoading: true, error: null, permissionDenied: false, conflict: false }));
     const messageParams = new URLSearchParams({ projectId: project.id, limit: '50' });
-    const [sceneBody, shotBody, assetBody, taskBody, versionBody, reviewBody, channelBody, messageBody] = await Promise.all([
+    const [sceneBody, shotBody, assetBody, taskBody, versionBody, reviewBody, channelBody, messageBody, fileBody] = await Promise.all([
       shotsApi.listScenes(project.id),
       shotsApi.listShots(project.id),
       assetsApi.listAssets(project.id),
@@ -604,6 +605,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
       reviewsApi.listReviewLists(project.id),
       chatApi.listChannels(project.id),
       chatApi.listMessages(messageParams),
+      filesApi.listFiles(project.id),
     ]);
     const noteBodies = await Promise.all(versionBody.versions.map(version =>
       versionsApi.listVersionNotes(version.id)
@@ -615,7 +617,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
     setVersions(versionBody.versions);
     setNotes(noteBodies.flatMap(body => body.notes));
     setReviewLists(reviewBody.reviewLists);
-    setFiles([]);
+    setFiles(fileBody.files);
     setChannels(channelBody.channels);
     setChatMessages(messageBody.chatMessages);
     updateProjectMetrics(shotBody.shots);
@@ -665,82 +667,49 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   };
 
 
-  const updateShots = (
+  const updateShots = async (
     shotIds: string[],
     updates: Partial<Pick<Shot, 'sceneCode' | 'assigneeId' | 'status'>>,
-  ) => {
-    if (currentUser.role !== 'admin' && currentUser.role !== 'director') return;
-    const selectedIds = new Set(shotIds);
-    if (!selectedIds.size) return;
-
-    const nextSceneCode = updates.sceneCode
-      ? normalizeSceneCode(updates.sceneCode)
-      : undefined;
-    const scenesByCode = new Map<string, Scene>(
-      scenes.map(scene => [normalizeSceneCode(scene.sceneCode), { ...scene }] as const),
-    );
-    if (nextSceneCode && !scenesByCode.has(nextSceneCode)) {
-      scenesByCode.set(nextSceneCode, {
-        id: createLocalId('sc'),
-        projectId: project.id,
-        sceneCode: nextSceneCode,
-        name: `场次 ${nextSceneCode}`,
-        description: '批量编辑创建的场次',
-        shotCount: 0,
-      });
+  ): Promise<void> => {
+    if (currentUser.role !== 'admin' && currentUser.role !== 'director') {
+      reportApiError(new Error('权限不足，只有管理员或导演可以批量编辑镜头。'), '权限不足，无法更新镜头。');
+      return;
     }
-
-    const nextShots = shots.map(shot => {
-      if (!selectedIds.has(shot.id)) return shot;
-      const sceneCode = nextSceneCode || shot.sceneCode;
-      const scene = scenesByCode.get(sceneCode);
-      return {
-        ...shot,
-        ...(updates.assigneeId ? { assigneeId: updates.assigneeId } : {}),
-        ...(updates.status ? { status: updates.status } : {}),
-        ...(nextSceneCode && scene
-          ? { sceneCode: nextSceneCode, sceneId: scene.id }
-          : {}),
-      };
-    });
-    const shotCounts = new Map<string, number>();
-    nextShots.forEach(shot => {
-      const sceneCode = normalizeSceneCode(shot.sceneCode);
-      shotCounts.set(sceneCode, (shotCounts.get(sceneCode) || 0) + 1);
-    });
-
-    setShots(nextShots);
-    setScenes(
-      Array.from(scenesByCode.values())
-        .map(scene => ({
-          ...scene,
-          shotCount: shotCounts.get(normalizeSceneCode(scene.sceneCode)) || 0,
-        }))
-        .sort((left, right) =>
-          left.sceneCode.localeCompare(right.sceneCode, undefined, { numeric: true })
-        ),
-    );
-    setTasks(previous => previous.map(task => {
-      if (task.entityType !== 'shot' || !selectedIds.has(task.entityId)) return task;
-      const shot = nextShots.find(item => item.id === task.entityId);
-      if (!shot) return task;
-      return {
-        ...task,
-        title: `${shot.sceneCode} / ${shot.shotCode} - ${task.pipelineStage}`,
-        ...(updates.assigneeId ? { assigneeId: updates.assigneeId } : {}),
-      };
-    }));
-    updateProjectMetrics(nextShots);
+    if (!shotIds.length) return;
+    setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
+    try {
+      await Promise.all(shotIds.map(shotId => shotsApi.updateShot(shotId, {
+        ...updates,
+        ...(updates.sceneCode ? { sceneCode: normalizeSceneCode(updates.sceneCode) } : {}),
+      })));
+      await refreshProjectData();
+    } catch (error) {
+      reportApiError(error, '更新镜头失败。');
+      throw error;
+    } finally {
+      setApiStatus(previous => ({ ...previous, isSaving: false }));
+    }
   };
 
   const deleteShots = async (shotIds: string[]) => {
-    if (currentUser.role !== 'admin' && currentUser.role !== 'director') return;
-    await Promise.all(shotIds.map(shotId => shotsApi.deleteShot(shotId)));
-    await refreshProjectData();
+    if (currentUser.role !== 'admin' && currentUser.role !== 'director') {
+      reportApiError(new Error('权限不足，只有管理员或导演可以删除镜头。'), '权限不足，无法删除镜头。');
+      return;
+    }
+    setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
+    try {
+      await Promise.all(shotIds.map(shotId => shotsApi.deleteShot(shotId)));
+      await refreshProjectData();
+    } catch (error) {
+      reportApiError(error, '删除镜头失败。');
+      throw error;
+    } finally {
+      setApiStatus(previous => ({ ...previous, isSaving: false }));
+    }
   };
 
 
-  const deleteShot = (shotId: string) => { void deleteShots([shotId]); };
+  const deleteShot = async (shotId: string) => { await deleteShots([shotId]); };
 
   // Add Asset with Pipeline Task Template
   const addAsset = async (assetData: Partial<Asset>) => {
@@ -757,12 +726,11 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   };
 
 
-  const importAssetsFromData = (importedData: ImportedAssetData[]) => {
+  const importAssetsFromData = async (importedData: ImportedAssetData[]) => {
     const existingNames = new Set(
       assets.map(asset => asset.name.trim().toLocaleLowerCase('zh-CN')),
     );
-    const importedAssets: Asset[] = [];
-    const importedTasks: Task[] = [];
+    const uniqueAssets: Array<Partial<Asset>> = [];
     let skippedCount = 0;
 
     importedData.forEach(item => {
@@ -773,7 +741,6 @@ export const AppProvider: React.FC<AppProviderProps> = ({
         return;
       }
       existingNames.add(normalizedName);
-
       const assigneeQuery = item.assignee?.trim().toLocaleLowerCase('zh-CN');
       const matchedAssignee = assigneeQuery
         ? users.find(user =>
@@ -782,38 +749,32 @@ export const AppProvider: React.FC<AppProviderProps> = ({
             user.email?.trim().toLocaleLowerCase('zh-CN') === assigneeQuery
           )
         : undefined;
-      const assetId = createLocalId('a');
-      const asset: Asset = {
-        id: assetId,
-        projectId: project.id,
+      uniqueAssets.push({
         name,
         category: item.category,
         thumbnailUrl: item.thumbnailUrl?.trim() ||
           'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600&auto=format&fit=crop&q=80',
         assigneeId: matchedAssignee?.id || currentUser.id,
         status: '制作中',
-        usageCount: 0,
-        usedInShotIds: [],
         description: item.description.trim() || `${name}资产设定`,
         referenceImages: item.thumbnailUrl?.trim() ? [item.thumbnailUrl.trim()] : [],
         promptTemplate: item.promptTemplate?.trim() || '',
-      };
-      importedAssets.push(asset);
-      importedTasks.push(...createAssetPipelineTasks(
-        asset.id,
-        asset.name,
-        asset.assigneeId,
-      ));
+      });
     });
 
-    if (importedAssets.length) {
-      setAssets(previous => [...importedAssets, ...previous]);
-      setTasks(previous => [...importedTasks, ...previous]);
+    if (!uniqueAssets.length) return { createdCount: 0, skippedCount };
+
+    setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
+    try {
+      await Promise.all(uniqueAssets.map(asset => assetsApi.createAsset({ ...asset, projectId: project.id })));
+      await refreshProjectData();
+      return { createdCount: uniqueAssets.length, skippedCount };
+    } catch (error) {
+      reportApiError(error, '导入资产失败。');
+      throw error;
+    } finally {
+      setApiStatus(previous => ({ ...previous, isSaving: false }));
     }
-    return {
-      createdCount: importedAssets.length,
-      skippedCount,
-    };
   };
 
 
@@ -829,116 +790,96 @@ export const AppProvider: React.FC<AppProviderProps> = ({
       formData.append('entityType', task.entityType);
       formData.append('entityId', task.entityId);
     }
-    const body = await versionsApi.uploadVersionFile(formData);
-    return body.file;
+    try {
+      const body = await filesApi.uploadFile(formData);
+      await refreshProjectData();
+      return body.file;
+    } catch (error) {
+      reportApiError(error, '上传版本文件失败。');
+      throw error;
+    }
   };
 
   // Add new Version
   const addVersion = async (versionData: Omit<Version, 'id' | 'createdAt'>) => {
-    await versionsApi.createVersion(versionData);
-    await refreshProjectData();
+    setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
+    try {
+      await versionsApi.createVersion(versionData);
+      await refreshProjectData();
+    } catch (error) {
+      reportApiError(error, '保存版本失败。');
+      throw error;
+    } finally {
+      setApiStatus(previous => ({ ...previous, isSaving: false }));
+    }
   };
 
 
   // Approve / Reject / Update Version Status
-  const updateVersionStatus = (versionId: string, status: VersionStatus) => {
-    void versionsApi.updateVersionStatus(versionId, status).catch(error => {
-      reportApiError(error, '更新版本状态失败，已回滚本地状态。');
-      void refreshProjectData();
-    });
-    const version = versions.find(v => v.id === versionId);
-    if (!version) return;
-
-    setVersions(prev => prev.map(v => v.id === versionId ? { ...v, status } : v));
-
-    const task = tasks.find(t => t.id === version.taskId);
-    if (!task) return;
-
-    // Determine new task status based on version approval
-    let newTaskStatus: TaskStatus = '制作中';
-    if (status === '已通过' || status === '最终版') {
-      newTaskStatus = '已完成';
-    } else if (status === '已退回') {
-      newTaskStatus = '修改中';
-    } else if (status === '待审核') {
-      newTaskStatus = '待审核';
-    }
-
-    // Update Task
-    setTasks(prev => {
-      const updatedTasks = prev.map(t => {
-        if (t.id === task.id) {
-          return { ...t, status: newTaskStatus };
-        }
-        // Unblock dependent task if this task is now completed
-        if (t.prerequisiteTaskId === task.id && (status === '已通过' || status === '最终版')) {
-          return { ...t, status: '制作中' as TaskStatus };
-        }
-        return t;
-      });
-      return updatedTasks;
-    });
-
-    // Update Entity Status
-    if (version.entityType === 'shot') {
-      setShots(prev => {
-        const updated = prev.map(s => {
-          if (s.id === version.entityId) {
-            let sStatus: ShotStatus = '制作中';
-            if (status === '已通过') sStatus = '已完成';
-            else if (status === '最终版') sStatus = '已锁定';
-            else if (status === '已退回') sStatus = '制作中';
-            else if (status === '待审核') sStatus = '审核中';
-            return { ...s, status: sStatus };
-          }
-          return s;
-        });
-        updateProjectMetrics(updated);
-        return updated;
-      });
-    } else if (version.entityType === 'asset') {
-      setAssets(prev => prev.map(a => {
-        if (a.id === version.entityId) {
-          let aStatus: AssetStatus = '制作中';
-          if (status === '已通过') aStatus = '已定稿';
-          else if (status === '最终版') aStatus = '已锁定';
-          else if (status === '已退回') aStatus = '制作中';
-          else if (status === '待审核') aStatus = '审核中';
-          return {
-            ...a,
-            status: aStatus,
-            approvedVersionId: status === '已通过' || status === '最终版' ? versionId : a.approvedVersionId
-          };
-        }
-        return a;
-      }));
+  const updateVersionStatus = async (versionId: string, status: VersionStatus) => {
+    setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
+    try {
+      await versionsApi.updateVersionStatus(versionId, status);
+      await refreshProjectData();
+    } catch (error) {
+      reportApiError(error, '更新版本状态失败。');
+      throw error;
+    } finally {
+      setApiStatus(previous => ({ ...previous, isSaving: false }));
     }
   };
 
   // Add Note
   const addNote = async (noteData: Omit<Note, 'id' | 'createdAt'>) => {
-    const body = await versionsApi.createVersionNote(noteData);
-    setNotes(previous => [body.note, ...previous.filter(note => note.id !== body.note.id)]);
+    setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
+    try {
+      const body = await versionsApi.createVersionNote(noteData);
+      setNotes(previous => [body.note, ...previous.filter(note => note.id !== body.note.id)]);
+    } catch (error) {
+      reportApiError(error, '保存审核意见失败。');
+      throw error;
+    } finally {
+      setApiStatus(previous => ({ ...previous, isSaving: false }));
+    }
   };
 
 
   // Update Task Status
-  const updateTaskStatus = (taskId: string, status: TaskStatus) => {
-    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status } : t));
+  const updateTaskStatus = async (taskId: string, status: TaskStatus) => {
+    setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
+    try {
+      await tasksApi.updateTask(taskId, { status });
+      await refreshProjectData();
+    } catch (error) {
+      reportApiError(error, '更新任务状态失败。');
+      throw error;
+    } finally {
+      setApiStatus(previous => ({ ...previous, isSaving: false }));
+    }
   };
 
   // Create Review List (Playlist)
   const createReviewList = async (title: string, date: string, versionIds: string[], description?: string) => {
-    const body = await reviewsApi.createReviewList(project.id, { title, date, versionIds, description });
-    setReviewLists(prev => [body.reviewList, ...prev.filter(item => item.id !== body.reviewList.id)]);
-    setSelectedReviewListId(body.reviewList.id);
+    setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
+    try {
+      const body = await reviewsApi.createReviewList(project.id, { title, date, versionIds, description });
+      await refreshProjectData();
+      setSelectedReviewListId(body.reviewList.id);
+    } catch (error) {
+      reportApiError(error, '创建审核单失败。');
+      throw error;
+    } finally {
+      setApiStatus(previous => ({ ...previous, isSaving: false }));
+    }
   };
 
   // Batch import shots from parsed Excel / CSV array
   const importShotsFromData = async (importedData: Array<{ sceneCode: string; shotCode: string; description: string; durationSec: number; shotType: string; cameraMovement: string; assetNames?: string }>): Promise<void> => {
-    const body = await shotsApi.bulkCreateShots({
-      projectId: project.id,
-      shots: importedData.map((item, index) => ({
+    setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
+    try {
+      await shotsApi.bulkCreateShots({
+        projectId: project.id,
+        shots: importedData.map((item, index) => ({
           sceneCode: normalizeSceneCode(item.sceneCode),
           shotCode: (item.shotCode || `SH${String(shots.length + index + 1).padStart(3, '0')}`)
             .trim()
@@ -948,51 +889,48 @@ export const AppProvider: React.FC<AppProviderProps> = ({
           shotType: item.shotType || '中景',
           cameraMovement: item.cameraMovement || '固定镜头',
           assigneeId: currentUser.id,
-      })),
-    });
-
-    const sceneMap = new Map<string, Scene>(scenes.map(scene => [scene.id, scene]));
-    body.scenes.forEach(scene => sceneMap.set(scene.id, scene));
-
-    const shotMap = new Map<string, Shot>(shots.map(shot => [shot.id, shot]));
-    body.shots.forEach(shot => shotMap.set(shot.id, shot));
-
-    const taskMap = new Map<string, Task>(tasks.map(task => [task.id, task]));
-    body.tasks.forEach(task => taskMap.set(task.id, task));
-
-    const nextShots = Array.from(shotMap.values()).sort((left, right) =>
-      left.shotCode.localeCompare(right.shotCode, undefined, { numeric: true })
-    );
-    const shotCounts = new Map<string, number>();
-    nextShots.forEach(shot => {
-      const sceneCode = normalizeSceneCode(shot.sceneCode);
-      shotCounts.set(sceneCode, (shotCounts.get(sceneCode) || 0) + 1);
-    });
-
-    setScenes(Array.from(sceneMap.values())
-      .map(scene => ({ ...scene, shotCount: shotCounts.get(normalizeSceneCode(scene.sceneCode)) || scene.shotCount || 0 }))
-      .sort((left, right) => left.sceneCode.localeCompare(right.sceneCode, undefined, { numeric: true })));
-    setShots(nextShots);
-    setTasks(Array.from(taskMap.values()).sort((left, right) => right.createdAt.localeCompare(left.createdAt)));
-    updateProjectMetrics(nextShots);
+        })),
+      });
+      await refreshProjectData();
+    } catch (error) {
+      reportApiError(error, '导入镜头失败。');
+      throw error;
+    } finally {
+      setApiStatus(previous => ({ ...previous, isSaving: false }));
+    }
   };
 
   // Communication Methods
   const sendChatMessage = async (msgData: Omit<ChatMessage, 'id' | 'createdAt'>) => {
-    const body = await chatApi.createMessage(msgData);
-    setChatMessages(prev => [...prev, body.message]);
+    try {
+      const body = await chatApi.createMessage(msgData);
+      setChatMessages(prev => [...prev, body.message]);
+    } catch (error) {
+      reportApiError(error, '发送消息失败。');
+      throw error;
+    }
   };
 
 
   const updateChatMessageMedia = async (messageId: string, editedMediaUrl: string) => {
-    await chatApi.updateMessageMedia(messageId, editedMediaUrl);
-    setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, editedMediaUrl } : m));
+    try {
+      await chatApi.updateMessageMedia(messageId, editedMediaUrl);
+      setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, editedMediaUrl } : m));
+    } catch (error) {
+      reportApiError(error, '更新消息媒体失败。');
+      throw error;
+    }
   };
 
   const toggleLikeMessage = async (messageId: string, userId: string) => {
     const message = chatMessages.find(item => item.id === messageId);
     const liked = Boolean(message?.likes?.includes(userId));
-    await chatApi.likeMessage(messageId, liked);
+    try {
+      await chatApi.likeMessage(messageId, liked);
+    } catch (error) {
+      reportApiError(error, '更新消息点赞失败。');
+      throw error;
+    }
     setChatMessages(prev => prev.map(m => {
       if (m.id === messageId) {
         const likes = m.likes || [];
@@ -1006,9 +944,14 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   };
 
   const createDepartmentChannel = async (channelData: Omit<DepartmentChannel, 'id' | 'unreadCount'>) => {
-    const body = await chatApi.createChannel(project.id, channelData);
-    setChannels(prev => [...prev, body.channel]);
-    return body.channel;
+    try {
+      const body = await chatApi.createChannel(project.id, channelData);
+      setChannels(prev => [...prev, body.channel]);
+      return body.channel;
+    } catch (error) {
+      reportApiError(error, '创建沟通频道失败。');
+      throw error;
+    }
   };
 
   // Reset to default sample state
