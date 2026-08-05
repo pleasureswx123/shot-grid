@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { pool } from './db';
 import { UUID_PATTERN, asyncHandler, readNumber, readString } from './apiUtils';
+import { canCommentReview, canReviewVersion, canSubmitVersion, canViewProject, getProjectPermissionContext } from './permissions';
 
 export const versionNotesRouter = Router({ mergeParams: true });
 export const notesRouter = Router();
@@ -48,13 +49,21 @@ const getNoteProjectId = async (noteId: string): Promise<string | null> => {
   return result.rows[0]?.project_id || null;
 };
 
-const requireAccess = async (projectId: string, userId: string, systemRole: string) => {
-  void systemRole;
-  const membership = await pool.query(
-    'SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2',
-    [projectId, userId],
-  );
-  return membership.rowCount ? null : { status: 403, error: '您不是该项目的成员。' };
+const requireCapability = async (
+  projectId: string,
+  userId: string,
+  systemRole: string,
+  capability: 'view' | 'comment' | 'reply' | 'resolve',
+) => {
+  const context = await getProjectPermissionContext(projectId, userId, systemRole);
+  const ok = capability === 'view'
+    ? canViewProject(context)
+    : capability === 'comment'
+      ? canCommentReview(context)
+      : capability === 'reply'
+        ? canSubmitVersion(context)
+        : canReviewVersion(context);
+  return ok ? null : { status: 403, error: '您没有执行该批注操作的权限。' };
 };
 
 const fetchNote = async (noteId: string) => {
@@ -69,7 +78,7 @@ versionNotesRouter.get('/', asyncHandler(async (request, response) => {
     response.status(UUID_PATTERN.test(versionId) ? 404 : 400).json({ error: UUID_PATTERN.test(versionId) ? '版本不存在。' : '版本 ID 无效。' });
     return;
   }
-  const accessError = await requireAccess(projectId, request.authUser!.id, request.authUser!.role);
+  const accessError = await requireCapability(projectId, request.authUser!.id, request.authUser!.role, 'view');
   if (accessError) {
     response.status(accessError.status).json({ error: accessError.error });
     return;
@@ -89,7 +98,7 @@ versionNotesRouter.post('/', asyncHandler(async (request, response) => {
     response.status(UUID_PATTERN.test(versionId) ? 404 : 400).json({ error: UUID_PATTERN.test(versionId) ? '版本不存在。' : '版本 ID 无效。' });
     return;
   }
-  const accessError = await requireAccess(projectId, request.authUser!.id, request.authUser!.role);
+  const accessError = await requireCapability(projectId, request.authUser!.id, request.authUser!.role, 'comment');
   if (accessError) {
     response.status(accessError.status).json({ error: accessError.error });
     return;
@@ -125,7 +134,14 @@ notesRouter.patch('/:noteId', asyncHandler(async (request, response) => {
     response.status(UUID_PATTERN.test(noteId) ? 404 : 400).json({ error: UUID_PATTERN.test(noteId) ? '批注不存在。' : '批注 ID 无效。' });
     return;
   }
-  const accessError = await requireAccess(projectId, request.authUser!.id, request.authUser!.role);
+  const changesStatus = typeof request.body?.status === 'string';
+  const changesReply = typeof request.body?.replyContent === 'string';
+  const accessError = await requireCapability(
+    projectId,
+    request.authUser!.id,
+    request.authUser!.role,
+    changesStatus ? 'resolve' : changesReply ? 'reply' : 'comment',
+  );
   if (accessError) {
     response.status(accessError.status).json({ error: accessError.error });
     return;

@@ -36,6 +36,13 @@ const parseError = async (response: Response): Promise<string> => {
   return `请求失败（${response.status}）`;
 };
 
+const roleDescriptions: Record<UserRole, string> = {
+  admin: '可查看/编辑项目、管理成员、创建任务和审核单、提交/审核版本、评论审核、删除文件。',
+  director: '可管理成员与内容流程，具备创建任务、审核单、提交/审核版本、评论审核、删除文件权限。',
+  creator: '可查看项目、创建任务、提交版本、回复审核意见和参与评论，不能管理成员或删除文件。',
+  client: '可查看项目、查看审核单、评论审核并参与版本审核，不能提交版本或改动项目设置。',
+};
+
 export const UserManagementModal: React.FC<UserManagementModalProps> = ({ onClose }) => {
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -167,7 +174,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({ onClos
                 className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 outline-none focus:border-indigo-500"
               >
                 {Object.entries(roleLabels).map(([value, label]) => (
-                  <option key={value} value={value}>{label}</option>
+                  <option key={value} value={value}>{label}｜{roleDescriptions[value as UserRole]}</option>
                 ))}
               </select>
               <input
@@ -179,6 +186,13 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({ onClos
                 className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-indigo-500"
                 required
               />
+            </div>
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+              {Object.entries(roleDescriptions).map(([value, description]) => (
+                <div key={value} className="rounded-lg border border-slate-800 bg-slate-950/50 p-2 text-[10px] text-slate-400">
+                  <span className="font-bold text-slate-200">{roleLabels[value as UserRole]}</span>：{description}
+                </div>
+              ))}
             </div>
             <div className="mt-3 flex justify-end">
               <button
@@ -227,6 +241,9 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({ onClos
                     <span className="px-2 py-1 bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 rounded text-[10px]">
                       {roleLabels[user.role]}
                     </span>
+                    <div className="mt-1.5 max-w-56 text-[9px] leading-relaxed text-slate-500">
+                      {roleDescriptions[user.role]}
+                    </div>
                     <div className={`mt-1.5 text-[9px] ${user.isActive ? 'text-emerald-400' : 'text-slate-500'}`}>
                       {user.isActive ? '已启用' : '已停用'}
                     </div>

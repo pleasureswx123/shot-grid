@@ -1,5 +1,5 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
-import { pool } from './db';
+import { canSubmitVersion, canViewProject, getProjectPermissionContext } from './permissions';
 
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -14,12 +14,8 @@ export const requireProjectAccess = async (
   userId: string,
   systemRole: string,
 ): Promise<boolean> => {
-  if (systemRole === 'admin') return true;
-  const result = await pool.query(
-    'SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2',
-    [projectId, userId],
-  );
-  return Boolean(result.rowCount);
+  const context = await getProjectPermissionContext(projectId, userId, systemRole);
+  return canViewProject(context);
 };
 
 export const requireProjectWriteAccess = async (
@@ -27,16 +23,8 @@ export const requireProjectWriteAccess = async (
   userId: string,
   systemRole: string,
 ): Promise<boolean> => {
-  if (systemRole === 'admin') return true;
-  const result = await pool.query(
-    `SELECT 1
-       FROM project_members
-      WHERE project_id = $1
-        AND user_id = $2
-        AND project_role IN ('admin', 'director', 'creator')`,
-    [projectId, userId],
-  );
-  return Boolean(result.rowCount);
+  const context = await getProjectPermissionContext(projectId, userId, systemRole);
+  return canSubmitVersion(context);
 };
 
 const readProjectIdFromRequest = (request: Request): string => (
