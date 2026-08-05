@@ -237,6 +237,10 @@ filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, res
       response.status(403).json({ error: '您不是该项目的成员。' });
       return;
     }
+    if (access.projectRole === 'client') {
+      response.status(403).json({ error: '客户成员不能上传或登记项目文件。' });
+      return;
+    }
 
     const fileId = randomUUID();
     const extension = path.extname(request.file.originalname).slice(1).toLowerCase();
@@ -358,6 +362,10 @@ filesRouter.post('/nas', asyncHandler(async (request, response) => {
   );
   if (!access) {
     response.status(403).json({ error: '您不是该项目的成员。' });
+    return;
+  }
+  if (access.projectRole === 'client') {
+    response.status(403).json({ error: '客户成员不能上传或登记项目文件。' });
     return;
   }
 

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { pool } from './db';
-import { asyncHandler, readNumber, readString, requireProjectAccess, requireProjectAccessFromRequest, UUID_PATTERN } from './apiUtils';
+import { asyncHandler, readNumber, readString, requireProjectAccessFromRequest, requireProjectWriteAccess, requireProjectWriteAccessFromRequest, UUID_PATTERN } from './apiUtils';
 import { ensureShotStorageStructure, removeShotStorageStructure } from './storage';
 
 export const shotsRouter = Router();
@@ -40,7 +40,7 @@ shotsRouter.get('/', asyncHandler(async (request, response) => {
 
 
 shotsRouter.post('/', asyncHandler(async (request, response) => {
-  const projectId = await requireProjectAccessFromRequest(request, response); if (!projectId) return;
+  const projectId = await requireProjectWriteAccessFromRequest(request, response); if (!projectId) return;
   const sceneCode = readString(request.body?.sceneCode, 'SC01').toUpperCase();
   const shotCode = readString(request.body?.shotCode).toUpperCase();
   if (!/^[A-Z0-9._-]{1,40}$/.test(sceneCode) || !/^[A-Z0-9._-]{1,40}$/.test(shotCode)) { response.status(400).json({ error: '场次或镜头编号无效。' }); return; }
@@ -56,7 +56,7 @@ shotsRouter.post('/', asyncHandler(async (request, response) => {
 }));
 
 shotsRouter.post('/bulk', asyncHandler(async (request, response) => {
-  const projectId = await requireProjectAccessFromRequest(request, response); if (!projectId) return;
+  const projectId = await requireProjectWriteAccessFromRequest(request, response); if (!projectId) return;
   const requestedShots = Array.isArray(request.body?.shots) ? request.body.shots : [];
   if (!requestedShots.length || requestedShots.length > 500) { response.status(400).json({ error: '镜头导入数据无效。' }); return; }
   const shots = requestedShots.map((shot: any, index: number) => normalizeShotImport(shot, index, request.authUser!.id));
@@ -125,8 +125,8 @@ shotsRouter.post('/bulk', asyncHandler(async (request, response) => {
 shotsRouter.patch('/:id', asyncHandler(async (request, response) => {
   const id = request.params.id; if (!UUID_PATTERN.test(id)) { response.status(400).json({ error: '镜头 ID 无效。' }); return; }
   const access = await pool.query('SELECT project_id FROM shots WHERE id=$1', [id]); if (!access.rowCount) { response.status(404).json({ error: '镜头不存在。' }); return; }
-  if (!await requireProjectAccess(access.rows[0].project_id, request.authUser!.id, request.authUser!.role)) { response.status(403).json({ error: '您不是该项目的成员。' }); return; }
+  if (!await requireProjectWriteAccess(access.rows[0].project_id, request.authUser!.id, request.authUser!.role)) { response.status(403).json({ error: '您不是该项目的成员。' }); return; }
   await pool.query(`UPDATE shots SET assignee_id=coalesce($2,assignee_id), status=coalesce($3,status), description=coalesce($4,description) WHERE id=$1`, [id, request.body?.assigneeId ?? null, request.body?.status ?? null, request.body?.description ?? null]);
   const result = await pool.query(`${selectShot} FROM shots sh JOIN scenes sc ON sc.id=sh.scene_id LEFT JOIN shot_assets sa ON sa.shot_id=sh.id WHERE sh.id=$1 GROUP BY sh.id, sc.scene_code`, [id]); response.json({ shot: result.rows[0] });
 }));
-shotsRouter.delete('/:id', asyncHandler(async (request, response) => { const id=request.params.id; const access=await pool.query('SELECT project_id FROM shots WHERE id=$1',[id]); if(!access.rowCount){response.status(404).json({error:'镜头不存在。'});return;} if(!await requireProjectAccess(access.rows[0].project_id,request.authUser!.id,request.authUser!.role)){response.status(403).json({error:'您不是该项目的成员。'});return;} await pool.query('DELETE FROM shots WHERE id=$1',[id]); response.status(204).end(); }));
+shotsRouter.delete('/:id', asyncHandler(async (request, response) => { const id=request.params.id; const access=await pool.query('SELECT project_id FROM shots WHERE id=$1',[id]); if(!access.rowCount){response.status(404).json({error:'镜头不存在。'});return;} if(!await requireProjectWriteAccess(access.rows[0].project_id,request.authUser!.id,request.authUser!.role)){response.status(403).json({error:'您不是该项目的成员。'});return;} await pool.query('DELETE FROM shots WHERE id=$1',[id]); response.status(204).end(); }));

@@ -22,15 +22,36 @@ export const requireProjectAccess = async (
   return Boolean(result.rowCount);
 };
 
+export const requireProjectWriteAccess = async (
+  projectId: string,
+  userId: string,
+  systemRole: string,
+): Promise<boolean> => {
+  if (systemRole === 'admin') return true;
+  const result = await pool.query(
+    `SELECT 1
+       FROM project_members
+      WHERE project_id = $1
+        AND user_id = $2
+        AND project_role IN ('admin', 'director', 'creator')`,
+    [projectId, userId],
+  );
+  return Boolean(result.rowCount);
+};
+
+const readProjectIdFromRequest = (request: Request): string => (
+  typeof request.query.projectId === 'string'
+    ? request.query.projectId
+    : typeof request.body?.projectId === 'string'
+      ? request.body.projectId
+      : ''
+);
+
 export const requireProjectAccessFromRequest = async (
   request: Request,
   response: Response,
 ): Promise<string | null> => {
-  const projectId = typeof request.query.projectId === 'string'
-    ? request.query.projectId
-    : typeof request.body?.projectId === 'string'
-      ? request.body.projectId
-      : '';
+  const projectId = readProjectIdFromRequest(request);
   if (!UUID_PATTERN.test(projectId)) {
     response.status(400).json({ error: '项目 ID 无效。' });
     return null;
@@ -49,4 +70,21 @@ export const readString = (value: unknown, fallback = ''): string =>
 export const readNumber = (value: unknown, fallback = 0): number => {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : fallback;
+};
+
+export const requireProjectWriteAccessFromRequest = async (
+  request: Request,
+  response: Response,
+): Promise<string | null> => {
+  const projectId = readProjectIdFromRequest(request);
+  if (!UUID_PATTERN.test(projectId)) {
+    response.status(400).json({ error: '项目 ID 无效。' });
+    return null;
+  }
+  const ok = await requireProjectWriteAccess(projectId, request.authUser!.id, request.authUser!.role);
+  if (!ok) {
+    response.status(403).json({ error: '您没有写入该项目的权限。' });
+    return null;
+  }
+  return projectId;
 };
