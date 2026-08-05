@@ -17,7 +17,7 @@ import {
   resolveWithinStorage,
   sha256File,
 } from './storage';
-import { recordAuditLog } from './audit';
+import { AUDIT_EVENTS, recordAuditLog } from './audit';
 
 const execFileAsync = promisify(execFile);
 
@@ -303,7 +303,7 @@ filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, res
         ],
       );
       await recordAuditLog(client, request, {
-        action: 'file.upload',
+        action: AUDIT_EVENTS.FILE_UPLOAD,
         projectId,
         entityType: 'file',
         entityId: fileId,
@@ -443,6 +443,7 @@ filesRouter.get('/:fileId/content', asyncHandler(async (request, response, next)
     return;
   }
 
+  await recordAuditLog(pool, request, { action: AUDIT_EVENTS.FILE_DOWNLOAD, projectId: file.projectId, entityType: 'file', entityId: file.id, details: { name: file.name, disposition: request.query.download === '1' ? 'attachment' : 'inline' } });
   const absolutePath = resolveWithinStorage(file.storageKey);
   await stat(absolutePath);
   const disposition = request.query.download === '1' ? 'attachment' : 'inline';
@@ -454,6 +455,43 @@ filesRouter.get('/:fileId/content', asyncHandler(async (request, response, next)
   response.sendFile(absolutePath, (error) => {
     if (error && !response.headersSent) next(error);
   });
+}));
+
+
+filesRouter.post('/:fileId/restore', asyncHandler(async (request, response) => {
+  const fileId = request.params.fileId;
+  if (!UUID_PATTERN.test(fileId)) {
+    response.status(400).json({ error: '文件 ID 无效。' });
+    return;
+  }
+  const result = await pool.query<FileRow>(
+    `${selectFileColumns}
+      WHERE f.id = $1 AND f.deleted_at IS NOT NULL`,
+    [fileId],
+  );
+  const file = result.rows[0];
+  if (!file) {
+    response.status(404).json({ error: '文件不存在或未被删除。' });
+    return;
+  }
+  const access = await getProjectAccess(file.projectId, request.authUser!.id, request.authUser!.role);
+  if (!access || (request.authUser!.role !== 'admin' && !['admin', 'director'].includes(access.projectRole))) {
+    response.status(403).json({ error: '您没有恢复该文件的权限。' });
+    return;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('UPDATE project_files SET deleted_at = NULL WHERE id = $1', [file.id]);
+    await recordAuditLog(client, request, { action: AUDIT_EVENTS.FILE_RESTORE, projectId: file.projectId, entityType: 'file', entityId: file.id, details: { name: file.name } });
+    await client.query('COMMIT');
+    response.json({ file: mapFile(file) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }));
 
 filesRouter.delete('/:fileId', asyncHandler(async (request, response) => {
@@ -501,7 +539,7 @@ filesRouter.delete('/:fileId', asyncHandler(async (request, response) => {
     await pool.query(
       `INSERT INTO audit_logs (
         actor_id, project_id, action, entity_type, entity_id, details, ip_address
-      ) VALUES ($1, $2, 'file.remove', 'file', $3, $4::jsonb, $5)`,
+      ) VALUES ($1, $2, 'file.delete', 'file', $3, $4::jsonb, $5)`,
       [
         request.authUser!.id,
         file.projectId,
