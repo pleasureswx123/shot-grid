@@ -1,0 +1,44 @@
+import { randomUUID } from 'node:crypto';
+import { Router } from 'express';
+import { pool } from './db';
+import { asyncHandler, readNumber, readString, requireProjectAccess, requireProjectAccessFromRequest, UUID_PATTERN } from './apiUtils';
+
+export const shotsRouter = Router();
+
+const selectShot = `SELECT sh.id, sh.project_id AS "projectId", sh.scene_id AS "sceneId", sc.scene_code AS "sceneCode",
+  sh.shot_code AS "shotCode", sh.duration_sec::float8 AS "durationSec", sh.shot_type AS "shotType",
+  sh.camera_movement AS "cameraMovement", sh.description, coalesce(sh.dialogue, '') AS dialogue,
+  sh.current_stage AS "currentStage", sh.assignee_id AS "assigneeId", sh.status,
+  sh.latest_version_id AS "latestVersionId", sh.thumbnail_url AS "thumbnailUrl",
+  coalesce(array_remove(array_agg(sa.asset_id), NULL), '{}') AS "assetIds"`;
+
+shotsRouter.get('/', asyncHandler(async (request, response) => {
+  const projectId = await requireProjectAccessFromRequest(request, response); if (!projectId) return;
+  const result = await pool.query(`${selectShot} FROM shots sh JOIN scenes sc ON sc.id = sh.scene_id LEFT JOIN shot_assets sa ON sa.shot_id = sh.id WHERE sh.project_id = $1 GROUP BY sh.id, sc.scene_code ORDER BY sh.sort_order ASC, sh.shot_code ASC`, [projectId]);
+  response.json({ shots: result.rows });
+}));
+
+shotsRouter.post('/', asyncHandler(async (request, response) => {
+  const projectId = await requireProjectAccessFromRequest(request, response); if (!projectId) return;
+  const sceneCode = readString(request.body?.sceneCode, 'SC01').toUpperCase();
+  const shotCode = readString(request.body?.shotCode).toUpperCase();
+  if (!/^[A-Z0-9._-]{1,40}$/.test(sceneCode) || !/^[A-Z0-9._-]{1,40}$/.test(shotCode)) { response.status(400).json({ error: '场次或镜头编号无效。' }); return; }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const scene = await client.query(`INSERT INTO scenes (id, project_id, scene_code, name, description) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (project_id, scene_code) DO UPDATE SET scene_code = EXCLUDED.scene_code RETURNING id`, [randomUUID(), projectId, sceneCode, readString(request.body?.sceneName, `场次 ${sceneCode}`), readString(request.body?.sceneDescription)]);
+    const shot = await client.query(`WITH inserted AS (INSERT INTO shots (id, project_id, scene_id, shot_code, duration_sec, shot_type, camera_movement, description, dialogue, current_stage, assignee_id, status, thumbnail_url) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'视频生成',$10,$11,$12) RETURNING *) ${selectShot} FROM inserted sh JOIN scenes sc ON sc.id = sh.scene_id LEFT JOIN shot_assets sa ON sa.shot_id = sh.id GROUP BY sh.id, sh.project_id, sh.scene_id, sc.scene_code, sh.shot_code, sh.duration_sec, sh.shot_type, sh.camera_movement, sh.description, sh.dialogue, sh.current_stage, sh.assignee_id, sh.status, sh.latest_version_id, sh.thumbnail_url`, [randomUUID(), projectId, scene.rows[0].id, shotCode, readNumber(request.body?.durationSec, 5), readString(request.body?.shotType, '中景'), readString(request.body?.cameraMovement, '固定镜头'), readString(request.body?.description, '新建镜头描述'), readString(request.body?.dialogue), readString(request.body?.assigneeId, request.authUser!.id), readString(request.body?.status, '未开始'), readString(request.body?.thumbnailUrl)]);
+    const shotId = shot.rows[0].id;
+    await client.query(`INSERT INTO tasks (id, project_id, title, entity_type, entity_id, pipeline_stage, assignee_id, status, priority, due_date, requirements) VALUES ($1,$2,$3,'shot',$4,'视频生成',$5,'制作中','中',now()::date + 2,$6)`, [randomUUID(), projectId, `${sceneCode} / ${shotCode} - 视频生成`, shotId, readString(request.body?.assigneeId, request.authUser!.id), `${sceneCode} / ${shotCode} 的视频生成阶段制作要求`]);
+    await client.query('COMMIT'); response.status(201).json({ shot: shot.rows[0] });
+  } catch (e:any) { await client.query('ROLLBACK'); if (e?.code === '23505') { response.status(409).json({ error: '镜头编号已经存在。' }); return; } throw e; } finally { client.release(); }
+}));
+
+shotsRouter.patch('/:id', asyncHandler(async (request, response) => {
+  const id = request.params.id; if (!UUID_PATTERN.test(id)) { response.status(400).json({ error: '镜头 ID 无效。' }); return; }
+  const access = await pool.query('SELECT project_id FROM shots WHERE id=$1', [id]); if (!access.rowCount) { response.status(404).json({ error: '镜头不存在。' }); return; }
+  if (!await requireProjectAccess(access.rows[0].project_id, request.authUser!.id, request.authUser!.role)) { response.status(403).json({ error: '您不是该项目的成员。' }); return; }
+  await pool.query(`UPDATE shots SET assignee_id=coalesce($2,assignee_id), status=coalesce($3,status), description=coalesce($4,description) WHERE id=$1`, [id, request.body?.assigneeId ?? null, request.body?.status ?? null, request.body?.description ?? null]);
+  const result = await pool.query(`${selectShot} FROM shots sh JOIN scenes sc ON sc.id=sh.scene_id LEFT JOIN shot_assets sa ON sa.shot_id=sh.id WHERE sh.id=$1 GROUP BY sh.id, sc.scene_code`, [id]); response.json({ shot: result.rows[0] });
+}));
+shotsRouter.delete('/:id', asyncHandler(async (request, response) => { const id=request.params.id; const access=await pool.query('SELECT project_id FROM shots WHERE id=$1',[id]); if(!access.rowCount){response.status(404).json({error:'镜头不存在。'});return;} if(!await requireProjectAccess(access.rows[0].project_id,request.authUser!.id,request.authUser!.role)){response.status(403).json({error:'您不是该项目的成员。'});return;} await pool.query('DELETE FROM shots WHERE id=$1',[id]); response.status(204).end(); }));

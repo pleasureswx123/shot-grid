@@ -8,6 +8,14 @@ import { pool } from './db';
 import { filesRouter } from './files';
 import { projectsRouter } from './projects';
 import { usersRouter } from './users';
+import { scenesRouter } from './scenes';
+import { shotsRouter } from './shots';
+import { assetsRouter } from './assets';
+import { tasksRouter } from './tasks';
+import { versionsRouter } from './versions';
+import { reviewsRouter } from './reviews';
+import { notesRouter } from './notes';
+import { chatRouter } from './chat';
 
 const projectRoot = process.cwd();
 
@@ -70,6 +78,14 @@ export const createApp = async () => {
   app.use('/api/users', requireAuth, usersRouter);
   app.use('/api/projects', requireAuth, projectsRouter);
   app.use('/api/files', requireAuth, filesRouter);
+  app.use('/api/scenes', requireAuth, scenesRouter);
+  app.use('/api/shots', requireAuth, shotsRouter);
+  app.use('/api/assets', requireAuth, assetsRouter);
+  app.use('/api/tasks', requireAuth, tasksRouter);
+  app.use('/api/versions', requireAuth, versionsRouter);
+  app.use('/api/reviews', requireAuth, reviewsRouter);
+  app.use('/api/notes', requireAuth, notesRouter);
+  app.use('/api/chat', requireAuth, chatRouter);
   app.get('/api/system/info', requireAuth, (request, response) => {
     response.json({
       name: 'ShotGrid Light',

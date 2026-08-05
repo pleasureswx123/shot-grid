@@ -64,8 +64,7 @@ interface AppContextType {
   resetToDefaultData: () => void;
 }
 
-const LEGACY_STORAGE_KEY = 'aistudio_shotgrid_state_v1';
-const PROJECT_STORAGE_PREFIX = 'aistudio_shotgrid_project_v2:';
+const IS_DEMO_MODE = (import.meta as unknown as { env?: { VITE_DEMO_MODE?: string } }).env?.VITE_DEMO_MODE === 'true';
 const PROJECT_FINISHING_STAGES = ['声音', '成片'] as const;
 
 const getProjectTaskDueDate = (project: Project, daysBeforeDelivery: number): string => {
@@ -125,7 +124,7 @@ export interface ProjectLocalState {
 }
 
 const createDefaultProjectState = (project: Project): ProjectLocalState => {
-  if (project.code === mockProject.code) {
+  if (IS_DEMO_MODE && project.code === mockProject.code) {
     return {
       scenes: mockScenes,
       shots: mockShots,
@@ -407,34 +406,35 @@ const sanitizeProjectState = (
   });
 };
 
-const readProjectState = (project: Project): ProjectLocalState => {
-  const defaults = createDefaultProjectState(project);
-  const projectStorageKey = `${PROJECT_STORAGE_PREFIX}${project.id}`;
+const readInitialProjectState = (project: Project): ProjectLocalState =>
+  normalizeScenesAndTasks(project, createDefaultProjectState(project));
 
+const parseApiError = async (response: Response, fallback: string): Promise<string> => {
   try {
-    const saved = localStorage.getItem(projectStorageKey);
-    if (saved) {
-      const parsed = { ...defaults, ...JSON.parse(saved) };
-      return sanitizeProjectState(project, parsed);
-    }
-
-    // Migrate the original single-project cache only into the NOMUD demo project.
-    if (project.code === mockProject.code) {
-      const legacySaved = localStorage.getItem(LEGACY_STORAGE_KEY);
-      if (legacySaved) {
-        const migrated = { ...defaults, ...JSON.parse(legacySaved) };
-        const normalized = sanitizeProjectState(project, migrated);
-        localStorage.setItem(projectStorageKey, JSON.stringify(normalized));
-        localStorage.removeItem(LEGACY_STORAGE_KEY);
-        return normalized;
-      }
-    }
-  } catch (error) {
-    console.warn('Failed to parse project state from localStorage:', error);
+    const body = await response.json();
+    if (typeof body?.error === 'string') return body.error;
+  } catch {
+    // Keep fallback message.
   }
-
-  return normalizeScenesAndTasks(project, defaults);
+  return fallback;
 };
+
+const apiRequest = async <T,>(path: string, options: RequestInit = {}): Promise<T> => {
+  const response = await fetch(path, {
+    credentials: 'same-origin',
+    ...options,
+    headers: {
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...options.headers,
+    },
+  });
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, `服务端请求失败（${response.status}）`));
+  }
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
+};
+
 
 export const createShotPipelineTasks = (
   shotId: string,
@@ -507,8 +507,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   initialProject,
   initialUsers
 }) => {
-  const [initialLocalState] = useState<ProjectLocalState>(() => readProjectState(initialProject));
-  const projectStorageKey = `${PROJECT_STORAGE_PREFIX}${initialProject.id}`;
+  const [initialLocalState] = useState<ProjectLocalState>(() => readInitialProjectState(initialProject));
   const [activeTab, setActiveTab] = useState<MainTab>('workbench');
 
   const [project, setProject] = useState<Project>(() => ({
@@ -518,7 +517,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   const [users, setUsers] = useState<User[]>(() => [
     currentUser,
     ...initialUsers.filter(user => user.id !== currentUser.id),
-    ...(initialProject.code === mockProject.code
+    ...(IS_DEMO_MODE && initialProject.code === mockProject.code
       ? mockUsers.filter(user => user.id !== currentUser.id)
       : [])
   ]);
@@ -554,7 +553,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
     setUsers([
       currentUser,
       ...initialUsers.filter(user => user.id !== currentUser.id),
-      ...(initialProject.code === mockProject.code
+      ...(IS_DEMO_MODE && initialProject.code === mockProject.code
         ? mockUsers.filter(user =>
           user.id !== currentUser.id &&
           !initialUsers.some(initialUser => initialUser.id === user.id)
@@ -563,38 +562,37 @@ export const AppProvider: React.FC<AppProviderProps> = ({
     ]);
   }, [currentUser, initialProject.code, initialUsers]);
 
-  // Save state changes to localStorage
+  const refreshProjectData = async (): Promise<void> => {
+    const query = `projectId=${encodeURIComponent(project.id)}`;
+    const [sceneBody, shotBody, assetBody, taskBody, versionBody, noteBody, reviewBody, channelBody, messageBody] = await Promise.all([
+      apiRequest<{ scenes: Scene[] }>(`/api/scenes?${query}`),
+      apiRequest<{ shots: Shot[] }>(`/api/shots?${query}`),
+      apiRequest<{ assets: Asset[] }>(`/api/assets?${query}`),
+      apiRequest<{ tasks: Task[] }>(`/api/tasks?${query}`),
+      apiRequest<{ versions: Version[] }>(`/api/versions?${query}`),
+      apiRequest<{ notes: Note[] }>(`/api/notes?${query}`),
+      apiRequest<{ reviewLists: ReviewList[] }>(`/api/reviews?${query}`),
+      apiRequest<{ channels: DepartmentChannel[] }>(`/api/chat/channels?${query}`),
+      apiRequest<{ chatMessages: ChatMessage[] }>(`/api/chat/messages?${query}`),
+    ]);
+    setScenes(sceneBody.scenes);
+    setShots(shotBody.shots);
+    setAssets(assetBody.assets);
+    setTasks(taskBody.tasks);
+    setVersions(versionBody.versions);
+    setNotes(noteBody.notes);
+    setReviewLists(reviewBody.reviewLists);
+    setFiles([]);
+    setChannels(channelBody.channels);
+    setChatMessages(messageBody.chatMessages);
+    updateProjectMetrics(shotBody.shots);
+  };
+
   useEffect(() => {
-    try {
-      const payload = {
-        scenes,
-        shots,
-        assets,
-        tasks,
-        versions,
-        notes,
-        reviewLists,
-        files,
-        channels,
-        chatMessages
-      };
-      localStorage.setItem(projectStorageKey, JSON.stringify(payload));
-    } catch (e) {
-      console.warn('Failed to save state:', e);
-    }
-  }, [
-    projectStorageKey,
-    scenes,
-    shots,
-    assets,
-    tasks,
-    versions,
-    notes,
-    reviewLists,
-    files,
-    channels,
-    chatMessages,
-  ]);
+    if (IS_DEMO_MODE && initialProject.code === mockProject.code) return;
+    refreshProjectData().catch(error => console.warn('Failed to load project data:', error));
+  }, [project.id, initialProject.code]);
+
 
   // Recalculate project shot metrics
   const updateProjectMetrics = (currentShots: Shot[]) => {
@@ -626,76 +624,18 @@ export const AppProvider: React.FC<AppProviderProps> = ({
 
   // Add Shot with Pipeline Task Template
   const addShot = async (shotData: Partial<Shot>): Promise<void> => {
-    const newId = createLocalId('sh');
     const shotCode = (shotData.shotCode || `SH${String(shots.length + 1).padStart(3, '0')}`)
       .trim()
       .toUpperCase();
     const sceneCode = normalizeSceneCode(shotData.sceneCode);
-    if (shots.some(shot => shot.shotCode.toUpperCase() === shotCode)) {
-      throw new Error(`镜头编号 ${shotCode} 已存在。`);
-    }
-    
-    // find or create scene
-    let scene = scenes.find(s => s.sceneCode === sceneCode);
-    if (!scene) {
-      scene = {
-        id: createLocalId('sc'),
-        projectId: project.id,
-        sceneCode,
-        name: `场次 ${sceneCode}`,
-        description: '新导入场次',
-        shotCount: 1
-      };
-    }
-
-    const newShot: Shot = {
-      id: newId,
-      shotCode,
-      projectId: project.id,
-      sceneId: scene.id,
-      sceneCode,
-      durationSec: shotData.durationSec || 5,
-      shotType: shotData.shotType || '中景',
-      cameraMovement: shotData.cameraMovement || '固定镜头',
-      description: shotData.description || '新建镜头描述',
-      dialogue: shotData.dialogue || '',
-      currentStage: '视频生成',
-      assigneeId: currentUser.id,
-      status: '未开始',
-      thumbnailUrl: shotData.thumbnailUrl || 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80',
-      assetIds: (shotData.assetIds || []).filter(assetId =>
-        assets.some(asset => asset.id === assetId)
-      )
-    };
-
-    const newTasks = createShotPipelineTasks(
-      newId,
-      sceneCode,
-      shotCode,
-      currentUser.id,
-    );
-
-    await ensureShotDirectories([{
-      shotId: newId,
-      shotCode,
-      sceneCode,
-    }]);
-    setScenes(previous => {
-      const existingScene = previous.find(item => item.id === scene!.id);
-      if (!existingScene) return [...previous, scene!];
-      return previous.map(item =>
-        item.id === scene!.id
-          ? { ...item, shotCount: item.shotCount + 1 }
-          : item
-      );
+    const body = await apiRequest<{ shot: Shot }>('/api/shots', {
+      method: 'POST',
+      body: JSON.stringify({ ...shotData, projectId: project.id, shotCode, sceneCode }),
     });
-    setShots(prev => {
-      const updated = [newShot, ...prev];
-      updateProjectMetrics(updated);
-      return updated;
-    });
-    setTasks(prev => [...newTasks, ...prev]);
+    await ensureShotDirectories([{ shotId: body.shot.id, shotCode, sceneCode }]);
+    await refreshProjectData();
   };
+
 
   const updateShots = (
     shotIds: string[],
@@ -765,97 +705,24 @@ export const AppProvider: React.FC<AppProviderProps> = ({
     updateProjectMetrics(nextShots);
   };
 
-  const deleteShots = (shotIds: string[]) => {
+  const deleteShots = async (shotIds: string[]) => {
     if (currentUser.role !== 'admin' && currentUser.role !== 'director') return;
-    const selectedIds = new Set(shotIds);
-    if (!selectedIds.size) return;
-
-    const existingIds = new Set(
-      shots.filter(shot => selectedIds.has(shot.id)).map(shot => shot.id),
-    );
-    if (!existingIds.size) return;
-
-    const relatedTaskIds = new Set(
-      tasks
-        .filter(task => task.entityType === 'shot' && existingIds.has(task.entityId))
-        .map(task => task.id),
-    );
-    const relatedVersionIds = new Set(
-      versions
-        .filter(version =>
-          (version.entityType === 'shot' && existingIds.has(version.entityId)) ||
-          relatedTaskIds.has(version.taskId)
-        )
-        .map(version => version.id),
-    );
-    const remainingShots = shots.filter(item => !existingIds.has(item.id));
-    const shotCounts = new Map<string, number>();
-    remainingShots.forEach(shot => {
-      const sceneCode = normalizeSceneCode(shot.sceneCode);
-      shotCounts.set(sceneCode, (shotCounts.get(sceneCode) || 0) + 1);
-    });
-
-    setShots(remainingShots);
-    updateProjectMetrics(remainingShots);
-    setScenes(previous => previous.map(scene => ({
-      ...scene,
-      shotCount: shotCounts.get(normalizeSceneCode(scene.sceneCode)) || 0,
-    })));
-    setTasks(previous => previous.filter(task => !relatedTaskIds.has(task.id)));
-    setVersions(previous => previous.filter(version => !relatedVersionIds.has(version.id)));
-    setNotes(previous => previous.filter(note => !relatedVersionIds.has(note.versionId)));
-    setReviewLists(previous => previous.map(reviewList => ({
-      ...reviewList,
-      versionIds: reviewList.versionIds.filter(versionId => !relatedVersionIds.has(versionId)),
-    })));
-    setFiles(previous => previous.filter(file =>
-      !(file.entityType === 'shot' && existingIds.has(file.entityId))
-    ));
-    setAssets(previous => previous.map(asset => {
-      const usedInShotIds = asset.usedInShotIds.filter(id => !existingIds.has(id));
-      return {
-        ...asset,
-        usedInShotIds,
-        usageCount: usedInShotIds.length,
-      };
-    }));
-    setChatMessages(previous => previous.map(message =>
-      message.referencedEntity?.type === 'shot' && existingIds.has(message.referencedEntity.id)
-        ? { ...message, referencedEntity: undefined }
-        : message
-    ));
-    setSelectedShotId(previous => previous && existingIds.has(previous) ? null : previous);
+    await Promise.all(shotIds.map(shotId => apiRequest<void>(`/api/shots/${shotId}`, { method: 'DELETE' })));
+    await refreshProjectData();
   };
 
-  const deleteShot = (shotId: string) => deleteShots([shotId]);
+
+  const deleteShot = (shotId: string) => { void deleteShots([shotId]); };
 
   // Add Asset with Pipeline Task Template
-  const addAsset = (assetData: Partial<Asset>) => {
-    const newId = `a_${Date.now().toString(36)}`;
-    const newAsset: Asset = {
-      id: newId,
-      projectId: project.id,
-      name: assetData.name || '新资产',
-      category: assetData.category || '道具',
-      thumbnailUrl: assetData.thumbnailUrl || 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600&auto=format&fit=crop&q=80',
-      assigneeId: assetData.assigneeId || currentUser.id,
-      status: '制作中',
-      usageCount: 0,
-      usedInShotIds: [],
-      description: assetData.description || '资产设定描述',
-      referenceImages: assetData.referenceImages || [assetData.thumbnailUrl || 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=600&auto=format&fit=crop&q=80'],
-      promptTemplate: assetData.promptTemplate || 'Cinematic concept art'
-    };
-
-    const newTasks = createAssetPipelineTasks(
-      newAsset.id,
-      newAsset.name,
-      newAsset.assigneeId,
-    );
-
-    setAssets(prev => [newAsset, ...prev]);
-    setTasks(prev => [...newTasks, ...prev]);
+  const addAsset = async (assetData: Partial<Asset>) => {
+    await apiRequest<{ asset: Asset }>('/api/assets', {
+      method: 'POST',
+      body: JSON.stringify({ ...assetData, projectId: project.id }),
+    });
+    await refreshProjectData();
   };
+
 
   const importAssetsFromData = (importedData: ImportedAssetData[]) => {
     const existingNames = new Set(
@@ -917,79 +784,14 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   };
 
   // Add new Version
-  const addVersion = (versionData: Omit<Version, 'id' | 'createdAt'>) => {
-    const newVersionId = `v_${Date.now().toString(36)}`;
-    const nowStr = new Date().toLocaleString('zh-CN', { hour12: false });
-
-    const newVersion: Version = {
-      ...versionData,
-      id: newVersionId,
-      createdAt: nowStr
-    };
-
-    setVersions(prev => [newVersion, ...prev]);
-
-    // Update Task latest version & status
-    setTasks(prev => prev.map(t => {
-      if (t.id === versionData.taskId) {
-        return {
-          ...t,
-          latestVersionId: newVersionId,
-          status: '待审核'
-        };
-      }
-      return t;
-    }));
-
-    // Update Shot or Asset latest version & status
-    if (versionData.entityType === 'shot') {
-      setShots(prev => {
-        const updated = prev.map(s => {
-          if (s.id === versionData.entityId) {
-            return {
-              ...s,
-              latestVersionId: newVersionId,
-              status: '审核中' as ShotStatus,
-              thumbnailUrl: versionData.thumbnailUrl || s.thumbnailUrl
-            };
-          }
-          return s;
-        });
-        updateProjectMetrics(updated);
-        return updated;
-      });
-    } else if (versionData.entityType === 'asset') {
-      setAssets(prev => prev.map(a => {
-        if (a.id === versionData.entityId) {
-          return {
-            ...a,
-            latestVersionId: newVersionId,
-            status: '审核中' as AssetStatus,
-            thumbnailUrl: versionData.thumbnailUrl || a.thumbnailUrl
-          };
-        }
-        return a;
-      }));
-    }
-
-    // Add Review file entry
-    const newFile: ProjectFile = {
-      id: `f_${Date.now().toString(36)}`,
-      name: `${versionData.entityId}_${versionData.versionNumber}_review.${versionData.fileType === 'video' ? 'mp4' : 'png'}`,
-      fileType: 'review',
-      extension: versionData.fileType === 'video' ? 'mp4' : 'png',
-      sizeMb: Math.round((Math.random() * 30 + 10) * 10) / 10,
-      url: versionData.fileUrl,
-      nasPath: versionData.aiParams?.nasPath,
-      entityType: versionData.entityType,
-      entityId: versionData.entityId,
-      entityCode: versionData.entityId.toUpperCase(),
-      versionNumber: versionData.versionNumber,
-      uploadedAt: nowStr,
-      uploaderId: versionData.uploaderId
-    };
-    setFiles(prev => [newFile, ...prev]);
+  const addVersion = async (versionData: Omit<Version, 'id' | 'createdAt'>) => {
+    await apiRequest<{ version: Version }>('/api/versions', {
+      method: 'POST',
+      body: JSON.stringify(versionData),
+    });
+    await refreshProjectData();
   };
+
 
   // Approve / Reject / Update Version Status
   const updateVersionStatus = (versionId: string, status: VersionStatus) => {
@@ -1063,15 +865,14 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   };
 
   // Add Note
-  const addNote = (noteData: Omit<Note, 'id' | 'createdAt'>) => {
-    const newNote: Note = {
-      ...noteData,
-      id: `n_${Date.now().toString(36)}`,
-      createdAt: new Date().toLocaleString('zh-CN', { hour12: false })
-    };
-
-    setNotes(prev => [newNote, ...prev]);
+  const addNote = async (noteData: Omit<Note, 'id' | 'createdAt'>) => {
+    await apiRequest<{ note: Note }>('/api/notes', {
+      method: 'POST',
+      body: JSON.stringify(noteData),
+    });
+    await refreshProjectData();
   };
+
 
   // Update Task Status
   const updateTaskStatus = (taskId: string, status: TaskStatus) => {
@@ -1185,14 +986,14 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   };
 
   // Communication Methods
-  const sendChatMessage = (msgData: Omit<ChatMessage, 'id' | 'createdAt'>) => {
-    const newMsg: ChatMessage = {
-      ...msgData,
-      id: `msg_${Date.now().toString(36)}`,
-      createdAt: new Date().toLocaleString('zh-CN', { hour12: false })
-    };
-    setChatMessages(prev => [...prev, newMsg]);
+  const sendChatMessage = async (msgData: Omit<ChatMessage, 'id' | 'createdAt'>) => {
+    const body = await apiRequest<{ message: ChatMessage }>('/api/chat/messages', {
+      method: 'POST',
+      body: JSON.stringify(msgData),
+    });
+    setChatMessages(prev => [...prev, body.message]);
   };
+
 
   const updateChatMessageMedia = (messageId: string, editedMediaUrl: string) => {
     setChatMessages(prev => prev.map(m => m.id === messageId ? { ...m, editedMediaUrl } : m));
@@ -1224,7 +1025,6 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   // Reset to default sample state
   const resetToDefaultData = () => {
     const defaults = createDefaultProjectState(initialProject);
-    localStorage.removeItem(projectStorageKey);
     setProject(initialProject);
     setScenes(defaults.scenes);
     setShots(defaults.shots);
