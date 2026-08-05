@@ -261,6 +261,9 @@ export const ReviewView: React.FC = () => {
                   ref={videoRef}
                   src={activeVersion.fileUrl}
                   poster={activeVersion.thumbnailUrl}
+                  controls
+                  onPlay={() => setIsPlaying(true)}
+                  onPause={() => setIsPlaying(false)}
                   onTimeUpdate={() => {
                     if (videoRef.current) setCurrentTimeSec(videoRef.current.currentTime);
                   }}
@@ -289,9 +292,9 @@ export const ReviewView: React.FC = () => {
 
               {/* Control Bar Overlay */}
               {activeVersion && activeVersion.fileType === 'video' && (
-                <div className="absolute bottom-0 inset-x-0 p-3 bg-gradient-to-t from-black/95 via-black/60 to-transparent z-30 flex items-center justify-between text-xs font-mono">
+                <div className="pointer-events-none absolute top-0 inset-x-0 p-3 bg-gradient-to-b from-black/90 via-black/45 to-transparent z-30 flex items-center justify-between text-xs font-mono">
                   <div className="flex items-center space-x-3">
-                    <button onClick={togglePlay} className="p-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full transition">
+                    <button onClick={togglePlay} className="pointer-events-auto p-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full transition">
                       {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
                     </button>
                     <span className="text-slate-200 font-bold">

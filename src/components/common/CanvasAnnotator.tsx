@@ -162,7 +162,7 @@ export const CanvasAnnotator: React.FC<CanvasAnnotatorProps> = ({
         onMouseMove={draw}
         onMouseUp={stopDraw}
         onMouseLeave={stopDraw}
-        className="cursor-crosshair absolute inset-0 z-20 w-full h-full touch-none"
+        className="cursor-crosshair absolute inset-x-0 top-0 bottom-12 z-20 w-full touch-none"
       />
 
       {/* Floating Canvas Toolbar */}
