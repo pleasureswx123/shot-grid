@@ -512,6 +512,17 @@ export const mockReviewLists: ReviewList[] = [
     date: '2026-07-28',
     versionIds: ['v10_3', 'v001_3', 'v002_6'],
     description: '针对SC01与SC03核心高潮镜头的视频生成质量集体汇审。',
+    status: '审核中',
+    roundNumber: 2,
+    dueAt: '2026-07-29T10:00:00Z',
+    createdBy: 'u2',
+    submittedBy: 'u2',
+    submittedAt: '2026-07-27T19:30:00Z',
+    completedAt: null,
+    participants: [
+      { userId: 'u1', role: '审核人', hasCompleted: true, completedAt: '2026-07-28T09:10:00Z' },
+      { userId: 'u4', role: '客户', hasCompleted: false, completedAt: null },
+    ],
     createdAt: '2026-07-27 19:00'
   },
   {
@@ -521,6 +532,16 @@ export const mockReviewLists: ReviewList[] = [
     date: '2026-07-25',
     versionIds: ['v_a1_8'],
     description: '苟翱天角色定稿设计与三视图终审。',
+    status: '已完成',
+    roundNumber: 1,
+    dueAt: '2026-07-26T10:00:00Z',
+    createdBy: 'u1',
+    submittedBy: 'u1',
+    submittedAt: '2026-07-25T10:30:00Z',
+    completedAt: '2026-07-25T18:00:00Z',
+    participants: [
+      { userId: 'u1', role: '审核人', hasCompleted: true, completedAt: '2026-07-25T17:00:00Z' },
+    ],
     createdAt: '2026-07-25 10:00'
   }
 ];
