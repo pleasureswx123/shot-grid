@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { X, Sparkles, Upload } from 'lucide-react';
+import { X, Sparkles, Upload, Link2 } from 'lucide-react';
 
 interface VersionUploadModalProps {
   initialTaskId?: string;
@@ -17,12 +17,13 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
 
   const [versionNumber, setVersionNumber] = useState<string>('V003');
   const [fileType, setFileType] = useState<'video' | 'image'>('video');
-  const [fileUrl, setFileUrl] = useState<string>('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4');
+  const [fileUrl, setFileUrl] = useState<string>('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [thumbnailUrl, setThumbnailUrl] = useState<string>('https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80');
-  const [changelog, setChangelog] = useState<string>('修改了人物表情过渡与镜头光晕效果。');
+  const [thumbnailUrl, setThumbnailUrl] = useState<string>('');
+  const [changelog, setChangelog] = useState<string>('');
+  const [isExternalVersionEnabled, setIsExternalVersionEnabled] = useState(false);
 
   // AI Parameters
   const [modelName, setModelName] = useState<string>('Kling 1.5 Pro');
@@ -34,6 +35,9 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
     ? `\\NAS\\NOMUD\\project\\${selectedTask.entityId}\\${selectedTask.pipelineStage}\\v003\\`
     : `\\NAS\\NOMUD\\EP01\\SC03\\${selectedTask?.entityId || 'SH010'}\\video\\v003\\`;
   const [nasPath, setNasPath] = useState<string>(defaultNasPath);
+
+  const isDemoMode = (import.meta as unknown as { env?: { VITE_DEMO_MODE?: string } }).env?.VITE_DEMO_MODE === 'true';
+  const canUseExternalVersion = currentUser.role === 'admin';
 
   const sampleVideos = [
     { name: 'ForBiggerBlazes (科幻警报火焰)', url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4', thumb: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80' },
@@ -48,9 +52,25 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
     setError(null);
 
     try {
+      const useExternalVersion = canUseExternalVersion && isExternalVersionEnabled;
+
+      if (!selectedFile && !useExternalVersion) {
+        throw new Error('请选择本地视频或图片并上传到服务器托管存储，或由管理员显式启用外链版本。');
+      }
+
+      if (useExternalVersion && !fileUrl.trim()) {
+        throw new Error('启用外链版本时必须填写外链媒体 URL。');
+      }
+
       const uploadedFile = selectedFile
         ? await uploadVersionFile(selectedFile, { taskId: selectedTask.id, versionNumber, fileType })
         : null;
+
+      if (selectedFile && (!uploadedFile?.id || !uploadedFile.contentUrl)) {
+        throw new Error('文件上传成功后未返回托管文件信息，请重试。');
+      }
+
+      const versionFileUrl = uploadedFile?.contentUrl || (useExternalVersion ? fileUrl.trim() : '');
 
       await addVersion({
         taskId: selectedTask.id,
@@ -58,19 +78,19 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
         entityId: selectedTask.entityId,
         versionNumber,
         fileId: uploadedFile?.id,
-        fileUrl: uploadedFile?.contentUrl || fileUrl,
+        fileUrl: versionFileUrl,
         fileType,
-        thumbnailUrl,
+        thumbnailUrl: thumbnailUrl.trim(),
         uploaderId: currentUser.id,
-        changelog,
+        changelog: changelog.trim(),
         status: '待审核',
         aiParams: {
           modelName,
-          prompt,
-          seed,
+          prompt: prompt.trim(),
+          seed: seed.trim(),
           cameraMotion,
           generationCost,
-          nasPath,
+          nasPath: nasPath.trim(),
           resolution: '3840x2160',
           aspectRatio: '2.39:1'
         }
@@ -139,33 +159,36 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
           </div>
 
           {/* Quick Preset Media */}
-          <div className="space-y-1.5">
-            <label className="text-slate-400 font-semibold">使用高清试看媒体数据</label>
-            <div className="grid grid-cols-3 gap-2">
-              {sampleVideos.map((s, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => {
-                    setFileUrl(s.url);
-                    setThumbnailUrl(s.thumb);
-                  }}
-                  className={`p-2 rounded-lg border text-left flex flex-col space-y-1 transition ${
-                    fileUrl === s.url ? 'bg-indigo-600/20 border-indigo-500 text-white' : 'bg-slate-800/60 border-slate-700 text-slate-300'
-                  }`}
-                >
-                  <img src={s.thumb} alt={s.name} className="w-full h-12 object-cover rounded" />
-                  <span className="text-[10px] truncate">{s.name}</span>
-                </button>
-              ))}
+          {isDemoMode && (
+            <div className="space-y-1.5">
+              <label className="text-slate-400 font-semibold">演示模式：使用高清试看媒体数据</label>
+              <div className="grid grid-cols-3 gap-2">
+                {sampleVideos.map((s, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      setFileUrl(s.url);
+                      setThumbnailUrl(s.thumb);
+                      setIsExternalVersionEnabled(canUseExternalVersion);
+                    }}
+                    className={`p-2 rounded-lg border text-left flex flex-col space-y-1 transition ${
+                      fileUrl === s.url ? 'bg-indigo-600/20 border-indigo-500 text-white' : 'bg-slate-800/60 border-slate-700 text-slate-300'
+                    }`}
+                  >
+                    <img src={s.thumb} alt={s.name} className="w-full h-12 object-cover rounded" />
+                    <span className="text-[10px] truncate">{s.name}</span>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="space-y-1">
-            <label className="text-slate-400 font-semibold">上传审核文件（可选，优先使用托管文件）</label>
+            <label className="text-slate-400 font-semibold">上传审核文件（必选）</label>
             <label className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-slate-700 bg-slate-800/60 p-3 text-slate-300 hover:border-indigo-500 cursor-pointer">
               <Upload className="w-4 h-4" />
-              <span>{selectedFile ? selectedFile.name : '选择本地视频或图片，先上传到 /api/files/upload'}</span>
+              <span>{selectedFile ? selectedFile.name : '选择本地视频或图片并上传到服务器托管存储'}</span>
               <input
                 type="file"
                 accept={fileType === 'video' ? 'video/*' : 'image/*'}
@@ -174,6 +197,46 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
               />
             </label>
           </div>
+
+          {canUseExternalVersion && (
+            <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-800/40 p-3">
+              <label className="flex items-center gap-2 text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={isExternalVersionEnabled}
+                  onChange={event => setIsExternalVersionEnabled(event.target.checked)}
+                  className="accent-indigo-500"
+                />
+                <Link2 className="w-4 h-4 text-indigo-300" />
+                <span className="font-semibold">管理员外链版本（不上传本地文件）</span>
+              </label>
+              <p className="text-[11px] text-slate-500">生产模式默认需要上传托管文件；仅管理员确认外部媒体已可访问时使用。</p>
+              {isExternalVersionEnabled && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">外链媒体 URL</label>
+                    <input
+                      type="url"
+                      value={fileUrl}
+                      onChange={e => setFileUrl(e.target.value)}
+                      placeholder="https://example.com/review-media.mp4"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">缩略图 URL（可选）</label>
+                    <input
+                      type="url"
+                      value={thumbnailUrl}
+                      onChange={e => setThumbnailUrl(e.target.value)}
+                      placeholder="https://example.com/thumb.jpg"
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {error && <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 p-2 text-rose-200">{error}</div>}
 
