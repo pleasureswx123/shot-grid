@@ -17,7 +17,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   onOpenImportAssets,
   onOpenNewVersion,
 }) => {
-  const { assets, users, shots, versions, selectedAssetId, setSelectedAssetId, setSelectedShotId, setActiveTab } = useApp();
+  const { assets, users, shots, versions, selectedAssetId, setSelectedAssetId, setSelectedShotId, setActiveTab, deleteAsset } = useApp();
 
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -42,6 +42,19 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   const activeAsset = assets.find(a => a.id === selectedAssetId);
   const activeAssetShots = shots.filter(s => activeAsset?.usedInShotIds.includes(s.id) || s.assetIds.includes(activeAsset?.id || ''));
   const activeAssetVersions = versions.filter(v => v.entityId === activeAsset?.id);
+  const handleDeleteAsset = async () => {
+    if (!activeAsset) return;
+    const message = `确定删除资产 ${activeAsset.name}？\n\n` +
+      `将影响 ${activeAssetShots.length} 个正在使用该资产的镜头、${activeAssetVersions.length} 个版本。\n` +
+      '删除后会进入回收站，可由管理员恢复。';
+    if (!window.confirm(message)) return;
+    try {
+      await deleteAsset(activeAsset.id, activeAssetShots.length > 0);
+      setSelectedAssetId(null);
+    } catch {
+      // API error is reported by context.
+    }
+  };
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto text-slate-100">
@@ -183,12 +196,20 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
                   {activeAsset.status}
                 </span>
               </div>
-              <button
-                onClick={() => setSelectedAssetId(null)}
-                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleDeleteAsset}
+                  className="px-2.5 py-1.5 text-xs bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 rounded transition"
+                >
+                  删除资产
+                </button>
+                <button
+                  onClick={() => setSelectedAssetId(null)}
+                  className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Asset Image Banner */}

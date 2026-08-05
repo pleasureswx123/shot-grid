@@ -56,6 +56,7 @@ interface AppContextType {
   deleteShot: (shotId: string) => Promise<void>;
   deleteShots: (shotIds: string[]) => Promise<void>;
   addAsset: (assetData: Partial<Asset>) => Promise<void>;
+  deleteAsset: (assetId: string, confirmImpact?: boolean) => Promise<void>;
   importAssetsFromData: (importedAssets: ImportedAssetData[]) => Promise<{
     createdCount: number;
     skippedCount: number;
@@ -730,6 +731,24 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   };
 
 
+  const deleteAsset = async (assetId: string, confirmImpact = false) => {
+    if (currentUser.role !== 'admin' && currentUser.role !== 'director') {
+      reportApiError(new Error('权限不足，只有管理员或导演可以删除资产。'), '权限不足，无法删除资产。');
+      return;
+    }
+    setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
+    try {
+      await assetsApi.deleteAsset(assetId, confirmImpact);
+      await refreshProjectData();
+    } catch (error) {
+      reportApiError(error, '删除资产失败。');
+      throw error;
+    } finally {
+      setApiStatus(previous => ({ ...previous, isSaving: false }));
+    }
+  };
+
+
   const importAssetsFromData = async (importedData: ImportedAssetData[]) => {
     const existingNames = new Set(
       assets.map(asset => asset.name.trim().toLocaleLowerCase('zh-CN')),
@@ -1018,6 +1037,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
         deleteShot,
         deleteShots,
         addAsset,
+        deleteAsset,
         importAssetsFromData,
         addVersion,
         uploadVersionFile,
