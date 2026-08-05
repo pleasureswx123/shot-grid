@@ -101,8 +101,8 @@ export const ShotsView: React.FC<ShotsViewProps> = ({
     ).length;
     const confirmed = window.confirm(
       `确定删除镜头 ${shot.shotCode}？\n\n` +
-      `将同时删除 ${relatedTasks} 个任务、${relatedVersions} 个版本及相关审核记录。\n` +
-      '该操作无法撤销。',
+      `将影响 ${relatedTasks} 个任务、${relatedVersions} 个版本及相关审核记录。\n` +
+      '删除后会进入回收站，可由管理员恢复。',
     );
     if (confirmed) {
       deleteShot(shot.id);
@@ -136,8 +136,8 @@ export const ShotsView: React.FC<ShotsViewProps> = ({
     ).length;
     const confirmed = window.confirm(
       `确定删除选中的 ${selectedIds.size} 个镜头？\n\n` +
-      `将同时删除 ${relatedTasks} 个任务、${relatedVersions} 个版本及相关审核记录。\n` +
-      '该操作无法撤销。',
+      `将影响 ${relatedTasks} 个任务、${relatedVersions} 个版本及相关审核记录。\n` +
+      '删除后会进入回收站，可由管理员恢复。',
     );
     if (!confirmed) return;
     deleteShots(selectedShotIds);

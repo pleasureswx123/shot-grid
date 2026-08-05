@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import type { UserRole } from '../src/types';
+import { AUDIT_EVENTS, recordAuditLog } from './audit';
 import { pool } from './db';
 import { requireRole } from './permissions';
 import { hashPassword } from './security';
@@ -59,6 +60,44 @@ adminRouter.get('/audit-logs', asyncHandler(async (request, response) => {
     values,
   );
   response.json({ auditLogs: result.rows });
+}));
+
+
+const RESTORABLE_ENTITIES: Record<string, { table: string; auditEvent: string; projectColumn?: string; entityType: string }> = {
+  shots: { table: 'shots', auditEvent: AUDIT_EVENTS.SHOT_RESTORE, projectColumn: 'project_id', entityType: 'shot' },
+  assets: { table: 'assets', auditEvent: AUDIT_EVENTS.ASSET_RESTORE, projectColumn: 'project_id', entityType: 'asset' },
+  tasks: { table: 'tasks', auditEvent: AUDIT_EVENTS.TASK_RESTORE, projectColumn: 'project_id', entityType: 'task' },
+  versions: { table: 'versions', auditEvent: AUDIT_EVENTS.VERSION_RESTORE, entityType: 'version' },
+  notes: { table: 'notes', auditEvent: AUDIT_EVENTS.NOTE_RESTORE, entityType: 'note' },
+  review_lists: { table: 'review_lists', auditEvent: AUDIT_EVENTS.REVIEW_LIST_RESTORE, projectColumn: 'project_id', entityType: 'review_list' },
+};
+
+adminRouter.post('/trash/:entityType/:entityId/restore', asyncHandler(async (request, response) => {
+  const config = RESTORABLE_ENTITIES[request.params.entityType];
+  const entityId = request.params.entityId;
+  if (!config) return void response.status(400).json({ error: '回收站实体类型无效。' });
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(entityId)) return void response.status(400).json({ error: '实体 ID 无效。' });
+
+  const projectExpr = config.projectColumn
+    ? config.projectColumn
+    : config.table === 'versions'
+      ? `(SELECT project_id FROM tasks WHERE tasks.id = ${config.table}.task_id)`
+      : `(SELECT t.project_id FROM versions v JOIN tasks t ON t.id = v.task_id WHERE v.id = ${config.table}.version_id)`;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const restored = await client.query(
+      `UPDATE ${config.table}
+          SET deleted_at = NULL, deleted_by = NULL${['shots','assets','tasks','review_lists','notes'].includes(config.table) ? ', updated_at = now()' : ''}
+        WHERE id = $1 AND deleted_at IS NOT NULL
+        RETURNING id, ${projectExpr} AS project_id`,
+      [entityId],
+    );
+    if (!restored.rowCount) { await client.query('ROLLBACK'); return void response.status(404).json({ error: '回收站中未找到该实体。' }); }
+    await recordAuditLog(client, request, { action: config.auditEvent, projectId: restored.rows[0].project_id, entityType: config.entityType, entityId, details: { restoredFrom: config.table } });
+    await client.query('COMMIT');
+    response.json({ restored: { entityType: request.params.entityType, entityId } });
+  } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
 }));
 
 adminRouter.post('/users', asyncHandler(async (request, response) => {

@@ -31,7 +31,7 @@ const getVersionProjectId = async (versionId: string): Promise<string | null> =>
     `SELECT t.project_id
      FROM versions v
      JOIN tasks t ON t.id = v.task_id
-     WHERE v.id = $1`,
+     WHERE v.id = $1 AND v.deleted_at IS NULL AND t.deleted_at IS NULL`,
     [versionId],
   );
   return result.rows[0]?.project_id || null;
@@ -44,7 +44,7 @@ const getNoteProjectId = async (noteId: string): Promise<string | null> => {
      FROM notes n
      JOIN versions v ON v.id = n.version_id
      JOIN tasks t ON t.id = v.task_id
-     WHERE n.id = $1`,
+     WHERE n.id = $1 AND n.deleted_at IS NULL AND v.deleted_at IS NULL AND t.deleted_at IS NULL`,
     [noteId],
   );
   return result.rows[0]?.project_id || null;
@@ -68,7 +68,7 @@ const requireCapability = async (
 };
 
 const fetchNote = async (noteId: string) => {
-  const result = await pool.query(`${selectNotes} WHERE n.id = $1`, [noteId]);
+  const result = await pool.query(`${selectNotes} WHERE n.id = $1 AND n.deleted_at IS NULL`, [noteId]);
   return result.rows[0];
 };
 
@@ -86,7 +86,7 @@ versionNotesRouter.get('/', asyncHandler(async (request, response) => {
   }
 
   const result = await pool.query(
-    `${selectNotes} WHERE n.version_id = $1 ORDER BY n.created_at DESC`,
+    `${selectNotes} WHERE n.version_id = $1 AND n.deleted_at IS NULL ORDER BY n.created_at DESC`,
     [versionId],
   );
   response.json({ notes: result.rows });
@@ -161,7 +161,7 @@ notesRouter.patch('/:noteId', asyncHandler(async (request, response) => {
          reply_content = COALESCE($8, reply_content),
          replied_at = CASE WHEN $8 IS NULL THEN replied_at ELSE now() END,
          updated_at = now()
-     WHERE id = $1`,
+     WHERE id = $1 AND deleted_at IS NULL`,
     [
       noteId,
       typeof request.body?.content === 'string' ? readString(request.body.content) : null,

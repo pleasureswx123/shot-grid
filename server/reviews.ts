@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import type { PoolClient } from 'pg';
+import { AUDIT_EVENTS, recordAuditLog } from './audit';
 import { pool } from './db';
 import { UUID_PATTERN, asyncHandler, readString } from './apiUtils';
 import { canCreateReviewList, canEditProject, canViewProject, getProjectPermissionContext } from './permissions';
@@ -63,7 +64,7 @@ const requireProjectRouteAccess = async (
 
 const getReviewListProjectId = async (id: string): Promise<string | null> => {
   if (!UUID_PATTERN.test(id)) return null;
-  const result = await pool.query<{ project_id: string }>('SELECT project_id FROM review_lists WHERE id = $1', [id]);
+  const result = await pool.query<{ project_id: string }>('SELECT project_id FROM review_lists WHERE id = $1 AND deleted_at IS NULL', [id]);
   return result.rows[0]?.project_id || null;
 };
 
@@ -71,14 +72,14 @@ const assertVersionsInProject = async (projectId: string, versionIds: string[]):
   if (versionIds.some(versionId => !UUID_PATTERN.test(versionId))) return false;
   if (!versionIds.length) return true;
   const result = await pool.query<{ id: string }>(
-    `SELECT v.id FROM versions v JOIN tasks t ON t.id = v.task_id WHERE t.project_id = $1 AND v.id = ANY($2::uuid[])`,
+    `SELECT v.id FROM versions v JOIN tasks t ON t.id = v.task_id WHERE t.project_id = $1 AND v.deleted_at IS NULL AND t.deleted_at IS NULL AND v.id = ANY($2::uuid[])`,
     [projectId, versionIds],
   );
   return result.rowCount === new Set(versionIds).size;
 };
 
 const fetchReviewList = async (id: string) => {
-  const result = await pool.query(`${selectReviewLists} WHERE rl.id = $1 GROUP BY rl.id`, [id]);
+  const result = await pool.query(`${selectReviewLists} WHERE rl.id = $1 AND rl.deleted_at IS NULL GROUP BY rl.id`, [id]);
   return result.rows[0];
 };
 
@@ -117,7 +118,7 @@ projectReviewListsRouter.get('/', asyncHandler(async (request, response) => {
   const projectId = request.params.projectId;
   const access = await requireProjectRouteAccess(projectId, request.authUser!.id, request.authUser!.role, 'view');
   if (access.ok !== true) return void response.status(access.status).json({ error: access.error });
-  const result = await pool.query(`${selectReviewLists} WHERE rl.project_id = $1 GROUP BY rl.id ORDER BY rl.review_date DESC, rl.created_at DESC`, [projectId]);
+  const result = await pool.query(`${selectReviewLists} WHERE rl.project_id = $1 AND rl.deleted_at IS NULL GROUP BY rl.id ORDER BY rl.review_date DESC, rl.created_at DESC`, [projectId]);
   response.json({ reviewLists: result.rows });
 }));
 
@@ -226,6 +227,7 @@ reviewListsRouter.delete('/:id', asyncHandler(async (request, response) => {
   if (!projectId) return void response.status(UUID_PATTERN.test(id) ? 404 : 400).json({ error: UUID_PATTERN.test(id) ? '审核单不存在。' : '审核单 ID 无效。' });
   const access = await requireProjectRouteAccess(projectId, request.authUser!.id, request.authUser!.role, 'delete');
   if (access.ok !== true) return void response.status(access.status).json({ error: access.error });
-  await pool.query('DELETE FROM review_lists WHERE id = $1', [id]);
+  await pool.query('UPDATE review_lists SET deleted_at = now(), deleted_by = $2, updated_at = now() WHERE id = $1 AND deleted_at IS NULL', [id, request.authUser!.id]);
+  await recordAuditLog(pool, request, { action: AUDIT_EVENTS.REVIEW_LIST_DELETE, projectId, entityType: 'review_list', entityId: id, details: { mode: 'soft' } });
   response.status(204).end();
 }));
