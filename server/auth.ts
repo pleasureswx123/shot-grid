@@ -8,6 +8,7 @@ import {
   hashSessionToken,
   verifyPassword,
 } from './security';
+import { recordAuditLog } from './audit';
 
 const SESSION_COOKIE = 'shotgrid_session';
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
@@ -190,11 +191,13 @@ authRouter.post('/login', loginRateLimit, asyncHandler(async (request, response)
         config.sessionTtlHours,
       ],
     );
-    await client.query(
-      `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, ip_address)
-       VALUES ($1, 'auth.login', 'user', $2, $3)`,
-      [user.id, user.id, request.ip || null],
-    );
+    await recordAuditLog(client, request, {
+      action: 'auth.login',
+      actorId: user.id,
+      entityType: 'user',
+      entityId: user.id,
+      details: { email: user.email },
+    });
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
@@ -212,8 +215,23 @@ authRouter.get('/me', requireAuth, (request, response) => {
 });
 
 authRouter.post('/logout', requireAuth, asyncHandler(async (request, response) => {
-  if (request.sessionTokenHash) {
-    await pool.query('DELETE FROM sessions WHERE token_hash = $1', [request.sessionTokenHash]);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    if (request.sessionTokenHash) {
+      await client.query('DELETE FROM sessions WHERE token_hash = $1', [request.sessionTokenHash]);
+    }
+    await recordAuditLog(client, request, {
+      action: 'auth.logout',
+      entityType: 'user',
+      entityId: request.authUser!.id,
+    });
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
   clearSessionCookie(response);
   response.status(204).end();

@@ -27,6 +27,40 @@ adminRouter.get('/users', asyncHandler(async (_request, response) => {
   response.json({ users: result.rows });
 }));
 
+
+adminRouter.get('/audit-logs', asyncHandler(async (request, response) => {
+  const limit = Math.min(Number.parseInt(String(request.query.limit || '100'), 10) || 100, 500);
+  const action = typeof request.query.action === 'string' ? request.query.action : '';
+  const projectId = typeof request.query.projectId === 'string' ? request.query.projectId : '';
+  const actorId = typeof request.query.actorId === 'string' ? request.query.actorId : '';
+  const from = typeof request.query.from === 'string' ? request.query.from : '';
+  const to = typeof request.query.to === 'string' ? request.query.to : '';
+  const conditions: string[] = [];
+  const values: unknown[] = [];
+  const add = (condition: string, value: unknown) => { values.push(value); conditions.push(condition.replace('?', `$${values.length}`)); };
+  if (action) add('al.action = ?', action);
+  if (projectId) add('al.project_id = ?::uuid', projectId);
+  if (actorId) add('al.actor_id = ?::uuid', actorId);
+  if (from) add('al.created_at >= ?::timestamptz', from);
+  if (to) add('al.created_at <= ?::timestamptz', to);
+  values.push(limit);
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const result = await pool.query(
+    `SELECT al.id, al.actor_id AS "actorId", u.name AS "actorName",
+            al.project_id AS "projectId", p.name AS "projectName",
+            al.action, al.entity_type AS "entityType", al.entity_id AS "entityId",
+            al.details, al.ip_address::text AS "ipAddress", al.created_at AS "createdAt"
+       FROM audit_logs al
+       LEFT JOIN users u ON u.id = al.actor_id
+       LEFT JOIN projects p ON p.id = al.project_id
+       ${where}
+      ORDER BY al.created_at DESC
+      LIMIT $${values.length}`,
+    values,
+  );
+  response.json({ auditLogs: result.rows });
+}));
+
 adminRouter.post('/users', asyncHandler(async (request, response) => {
   const name = typeof request.body?.name === 'string' ? request.body.name.trim() : '';
   const email = typeof request.body?.email === 'string'
