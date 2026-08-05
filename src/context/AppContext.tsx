@@ -54,9 +54,9 @@ interface AppContextType {
   addVersion: (versionData: Omit<Version, 'id' | 'createdAt'>) => Promise<void>;
   uploadVersionFile: (file: File, metadata: { taskId: string; versionNumber: string; fileType: 'video' | 'image' }) => Promise<ProjectFile>;
   updateVersionStatus: (versionId: string, status: VersionStatus) => void;
-  addNote: (noteData: Omit<Note, 'id' | 'createdAt'>) => void;
+  addNote: (noteData: Omit<Note, 'id' | 'createdAt'>) => Promise<void>;
   updateTaskStatus: (taskId: string, status: TaskStatus) => void;
-  createReviewList: (title: string, date: string, versionIds: string[], description?: string) => void;
+  createReviewList: (title: string, date: string, versionIds: string[], description?: string) => Promise<void>;
   importShotsFromData: (importedShots: Array<{ sceneCode: string; shotCode: string; description: string; durationSec: number; shotType: string; cameraMovement: string; assetNames?: string }>) => Promise<void>;
   sendChatMessage: (msg: Omit<ChatMessage, 'id' | 'createdAt'>) => void;
   updateChatMessageMedia: (messageId: string, editedMediaUrl: string) => void;
@@ -565,23 +565,25 @@ export const AppProvider: React.FC<AppProviderProps> = ({
 
   const refreshProjectData = async (): Promise<void> => {
     const query = `projectId=${encodeURIComponent(project.id)}`;
-    const [sceneBody, shotBody, assetBody, taskBody, versionBody, noteBody, reviewBody, channelBody, messageBody] = await Promise.all([
+    const [sceneBody, shotBody, assetBody, taskBody, versionBody, reviewBody, channelBody, messageBody] = await Promise.all([
       apiRequest<{ scenes: Scene[] }>(`/api/scenes?${query}`),
       apiRequest<{ shots: Shot[] }>(`/api/shots?${query}`),
       apiRequest<{ assets: Asset[] }>(`/api/assets?${query}`),
       apiRequest<{ tasks: Task[] }>(`/api/tasks?${query}`),
       apiRequest<{ versions: Version[] }>(`/api/projects/${project.id}/versions`),
-      apiRequest<{ notes: Note[] }>(`/api/notes?${query}`),
-      apiRequest<{ reviewLists: ReviewList[] }>(`/api/reviews?${query}`),
+      apiRequest<{ reviewLists: ReviewList[] }>(`/api/projects/${project.id}/review-lists`),
       apiRequest<{ channels: DepartmentChannel[] }>(`/api/chat/channels?${query}`),
       apiRequest<{ chatMessages: ChatMessage[] }>(`/api/chat/messages?${query}`),
     ]);
+    const noteBodies = await Promise.all(versionBody.versions.map(version =>
+      apiRequest<{ notes: Note[] }>(`/api/versions/${version.id}/notes`)
+    ));
     setScenes(sceneBody.scenes);
     setShots(shotBody.shots);
     setAssets(assetBody.assets);
     setTasks(taskBody.tasks);
     setVersions(versionBody.versions);
-    setNotes(noteBody.notes);
+    setNotes(noteBodies.flatMap(body => body.notes));
     setReviewLists(reviewBody.reviewLists);
     setFiles([]);
     setChannels(channelBody.channels);
@@ -890,11 +892,11 @@ export const AppProvider: React.FC<AppProviderProps> = ({
 
   // Add Note
   const addNote = async (noteData: Omit<Note, 'id' | 'createdAt'>) => {
-    await apiRequest<{ note: Note }>('/api/notes', {
+    const body = await apiRequest<{ note: Note }>(`/api/versions/${noteData.versionId}/notes`, {
       method: 'POST',
       body: JSON.stringify(noteData),
     });
-    await refreshProjectData();
+    setNotes(previous => [body.note, ...previous.filter(note => note.id !== body.note.id)]);
   };
 
 
@@ -904,18 +906,13 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   };
 
   // Create Review List (Playlist)
-  const createReviewList = (title: string, date: string, versionIds: string[], description?: string) => {
-    const newList: ReviewList = {
-      id: `rl_${Date.now().toString(36)}`,
-      projectId: project.id,
-      title,
-      date,
-      versionIds,
-      description,
-      createdAt: new Date().toLocaleString('zh-CN', { hour12: false })
-    };
-    setReviewLists(prev => [newList, ...prev]);
-    setSelectedReviewListId(newList.id);
+  const createReviewList = async (title: string, date: string, versionIds: string[], description?: string) => {
+    const body = await apiRequest<{ reviewList: ReviewList }>(`/api/projects/${project.id}/review-lists`, {
+      method: 'POST',
+      body: JSON.stringify({ title, date, versionIds, description }),
+    });
+    setReviewLists(prev => [body.reviewList, ...prev.filter(item => item.id !== body.reviewList.id)]);
+    setSelectedReviewListId(body.reviewList.id);
   };
 
   // Batch import shots from parsed Excel / CSV array

@@ -1,10 +1,11 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Pencil, Circle, ArrowRight, RotateCcw, Check, Sparkles } from 'lucide-react';
+import { Pencil, Circle, ArrowRight, RotateCcw } from 'lucide-react';
+import type { NoteAnnotation } from '../../types';
 
 interface CanvasAnnotatorProps {
   width: number;
   height: number;
-  onSaveAnnotation: (dataUrl: string) => void;
+  onSaveAnnotation: (dataUrl: string, annotations: NoteAnnotation[]) => void;
   onClear: () => void;
 }
 
@@ -19,6 +20,8 @@ export const CanvasAnnotator: React.FC<CanvasAnnotatorProps> = ({
   const [tool, setTool] = useState<'brush' | 'circle' | 'arrow'>('brush');
   const [color, setColor] = useState('#ef4444'); // default red
   const [startPos, setStartPos] = useState<{ x: number; y: number } | null>(null);
+  const [brushPoints, setBrushPoints] = useState<number[]>([]);
+  const [annotations, setAnnotations] = useState<NoteAnnotation[]>([]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -38,6 +41,7 @@ export const CanvasAnnotator: React.FC<CanvasAnnotatorProps> = ({
     setStartPos({ x, y });
 
     if (tool === 'brush') {
+      setBrushPoints([x, y]);
       const ctx = canvas.getContext('2d');
       if (ctx) {
         ctx.beginPath();
@@ -63,6 +67,7 @@ export const CanvasAnnotator: React.FC<CanvasAnnotatorProps> = ({
     if (tool === 'brush') {
       ctx.lineTo(x, y);
       ctx.stroke();
+      setBrushPoints(previous => [...previous, x, y]);
     }
   };
 
@@ -80,11 +85,22 @@ export const CanvasAnnotator: React.FC<CanvasAnnotatorProps> = ({
     ctx.strokeStyle = color;
     ctx.lineWidth = 3;
 
+    let annotation: NoteAnnotation | null = null;
+
     if (tool === 'circle') {
       const radius = Math.sqrt(Math.pow(x - startPos.x, 2) + Math.pow(y - startPos.y, 2));
       ctx.beginPath();
       ctx.arc(startPos.x, startPos.y, radius, 0, 2 * Math.PI);
       ctx.stroke();
+      annotation = {
+        id: globalThis.crypto?.randomUUID?.() || `ann_${Date.now().toString(36)}`,
+        type: 'circle',
+        x: startPos.x - radius,
+        y: startPos.y - radius,
+        width: radius * 2,
+        height: radius * 2,
+        color,
+      };
     } else if (tool === 'arrow') {
       ctx.beginPath();
       ctx.moveTo(startPos.x, startPos.y);
@@ -99,13 +115,28 @@ export const CanvasAnnotator: React.FC<CanvasAnnotatorProps> = ({
       ctx.moveTo(x, y);
       ctx.lineTo(x - 12 * Math.cos(angle + Math.PI / 6), y - 12 * Math.sin(angle + Math.PI / 6));
       ctx.stroke();
+      annotation = {
+        id: globalThis.crypto?.randomUUID?.() || `ann_${Date.now().toString(36)}`,
+        type: 'arrow',
+        points: [startPos.x, startPos.y, x, y],
+        color,
+      };
+    } else if (tool === 'brush') {
+      annotation = {
+        id: globalThis.crypto?.randomUUID?.() || `ann_${Date.now().toString(36)}`,
+        type: 'brush',
+        points: [...brushPoints, x, y],
+        color,
+      };
     }
 
+    const nextAnnotations = annotation ? [...annotations, annotation] : annotations;
+    if (annotation) setAnnotations(nextAnnotations);
     setIsDrawing(false);
     setStartPos(null);
 
     // notify parent of drawing snapshot
-    onSaveAnnotation(canvas.toDataURL());
+    onSaveAnnotation(canvas.toDataURL(), nextAnnotations);
   };
 
   const clearCanvas = () => {
@@ -115,6 +146,8 @@ export const CanvasAnnotator: React.FC<CanvasAnnotatorProps> = ({
     if (ctx) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
+    setAnnotations([]);
+    setBrushPoints([]);
     onClear();
   };
 
