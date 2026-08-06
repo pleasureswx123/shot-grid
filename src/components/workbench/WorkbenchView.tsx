@@ -15,17 +15,19 @@ export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }
   const { currentUser, tasks, shots, assets, versions, updateTaskStatus, setSelectedShotId, setActiveTab } = useApp();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [stageFilter, setStageFilter] = useState<TaskPipelineStage | '全部'>('全部');
+  const canViewInternal = currentUser.role !== 'client';
 
   // Filter tasks based on current user
-  const myMakingTasks = tasks.filter(t => t.assigneeId === currentUser.id && t.status === '制作中');
-  const myRevisingTasks = tasks.filter(t => t.assigneeId === currentUser.id && t.status === '修改中');
-  const myBlockedTasks = tasks.filter(t => t.assigneeId === currentUser.id && t.status === '已阻塞');
+  const internalTasks = canViewInternal ? tasks : [];
+  const myMakingTasks = internalTasks.filter(t => t.assigneeId === currentUser.id && t.status === '制作中');
+  const myRevisingTasks = internalTasks.filter(t => t.assigneeId === currentUser.id && t.status === '修改中');
+  const myBlockedTasks = internalTasks.filter(t => t.assigneeId === currentUser.id && t.status === '已阻塞');
   
   // Pending review for directors/admins or tasks in 待审核
-  const pendingReviewTasks = tasks.filter(t => t.status === '待审核');
+  const pendingReviewTasks = internalTasks.filter(t => t.status === '待审核');
   
   // All my active tasks
-  const myAllTasks = tasks.filter(t => t.assigneeId === currentUser.id && (stageFilter === '全部' || t.pipelineStage === stageFilter));
+  const myAllTasks = internalTasks.filter(t => t.assigneeId === currentUser.id && (stageFilter === '全部' || t.pipelineStage === stageFilter));
 
   // Recent versions
   const recentVersions = versions.slice(0, 5);
@@ -61,13 +63,13 @@ export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }
           </div>
         </div>
 
-        <button
+        {canViewInternal && <button
           onClick={() => onOpenNewVersion()}
           className="flex items-center space-x-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold shadow-lg shadow-indigo-600/30 transition"
         >
           <Sparkles className="w-4 h-4" />
           <span>提交新生成版本 (Version)</span>
-        </button>
+        </button>}
       </div>
 
       {/* 6 Metric Cards */}
@@ -268,7 +270,7 @@ export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }
                         <span className="text-[10px] text-indigo-400 font-mono font-bold">{version?.versionNumber || 'V001'}</span>
                       </div>
                       <div className="text-[10px] text-slate-400 mt-0.5 truncate">
-                        {version?.aiParams?.modelName || 'AI算法模型生成'}
+                        {canViewInternal ? (version?.aiParams?.modelName || 'AI算法模型生成') : '待审核版本'}
                       </div>
                     </div>
                   </div>
@@ -291,8 +293,8 @@ export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }
                     <span className="font-semibold text-slate-200">{v.entityId.toUpperCase()} {v.versionNumber}</span>
                     <span className="text-[10px] text-slate-400 font-mono">{v.createdAt}</span>
                   </div>
-                  <p className="text-[11px] text-slate-300 line-clamp-1">{v.changelog}</p>
-                  <p className="text-[10px] text-indigo-400/80">模型: {v.aiParams?.modelName || '未知'}</p>
+                  {canViewInternal && <p className="text-[11px] text-slate-300 line-clamp-1">{v.changelog}</p>}
+                  {canViewInternal && <p className="text-[10px] text-indigo-400/80">模型: {v.aiParams?.modelName || '未知'}</p>}
                 </div>
               ))}
             </div>

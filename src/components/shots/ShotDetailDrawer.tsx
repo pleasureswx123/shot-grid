@@ -19,6 +19,7 @@ export const ShotDetailDrawer: React.FC<ShotDetailDrawerProps> = ({ shotId, onCl
     currentUser, shots, scenes, assets, users, tasks, versions, notes,
     updateVersionStatus, addNote, updateTaskStatus
   } = useApp();
+  const canViewInternal = currentUser.role !== 'client';
 
   const shot = shots.find(s => s.id === shotId);
   if (!shot) return null;
@@ -155,7 +156,7 @@ export const ShotDetailDrawer: React.FC<ShotDetailDrawerProps> = ({ shotId, onCl
                         {Math.floor(currentTimeSec / 60)}:{(currentTimeSec % 60).toFixed(2).padStart(5, '0')} / {shot.durationSec}s
                       </span>
                     </div>
-                    {activeVersion.aiParams?.modelName && (
+                    {canViewInternal && activeVersion.aiParams?.modelName && (
                       <span className="px-2 py-0.5 bg-slate-800/80 text-indigo-300 rounded border border-slate-700 text-[10px]">
                         AI: {activeVersion.aiParams.modelName}
                       </span>
@@ -223,7 +224,7 @@ export const ShotDetailDrawer: React.FC<ShotDetailDrawerProps> = ({ shotId, onCl
           </div>
 
           {/* Middle Section: Versions Strip */}
-          <section className="space-y-3">
+          {canViewInternal && <section className="space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold text-white">任务详情</h3>
               <span className="text-[10px] text-slate-500">共 {shotTasks.length} 项</span>
@@ -231,7 +232,7 @@ export const ShotDetailDrawer: React.FC<ShotDetailDrawerProps> = ({ shotId, onCl
             {shotTasks.length > 0
               ? shotTasks.map(task => <TaskDetailCard key={task.id} task={task} />)
               : <div className="rounded-xl border border-dashed border-slate-700 p-5 text-center text-xs text-slate-500">该镜头暂无任务</div>}
-          </section>
+          </section>}
 
           <div className="bg-slate-800/40 border border-slate-800 rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between">
@@ -298,7 +299,7 @@ export const ShotDetailDrawer: React.FC<ShotDetailDrawerProps> = ({ shotId, onCl
               </h3>
 
               {/* Collapsible AI Parameters */}
-              {activeVersion?.aiParams && (
+              {canViewInternal && activeVersion?.aiParams && (
                 <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 space-y-2.5 text-xs">
                   <div className="flex items-center justify-between cursor-pointer" onClick={() => setShowAIParams(!showAIParams)}>
                     <span className="font-semibold text-slate-200">AI模型与提示词细节</span>

@@ -80,15 +80,18 @@ const canStreamNasFile = async (nasPath: string | null): Promise<boolean> => {
   }
 };
 
-const mapFile = async (row: FileRow) => {
+const mapFile = async (row: FileRow, projectRole: UserRole) => {
   const nasStreamable = row.storageKey ? false : await canStreamNasFile(row.nasPath);
-  return {
+  const mapped = {
     ...row,
     sizeBytes: Number(row.sizeBytes),
     storageKind: row.storageKey ? 'managed' : 'nas',
     contentUrl: row.storageKey || nasStreamable ? `/api/files/${row.id}/content` : null,
     nasStreamable,
   };
+  if (projectRole !== 'client') return mapped;
+  const { nasPath: _nasPath, storageKey: _storageKey, sha256: _sha256, ...clientFile } = mapped;
+  return { ...clientFile, nasStreamable: false };
 };
 
 const scanUploadForThreats = async (filePath: string): Promise<'not_configured' | 'clean'> => {
@@ -219,10 +222,11 @@ filesRouter.get('/', asyncHandler(async (request, response) => {
   const result = await pool.query<FileRow>(
     `${selectFileColumns}
       WHERE f.project_id = $1 AND f.deleted_at IS NULL
+        AND ($2::text <> 'client' OR f.file_type = 'review')
       ORDER BY f.uploaded_at DESC`,
-    [projectId],
+    [projectId, access.projectRole],
   );
-  response.json({ files: await Promise.all(result.rows.map(mapFile)) });
+  response.json({ files: await Promise.all(result.rows.map(row => mapFile(row, access.projectRole))) });
 }));
 
 filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, response) => {
@@ -341,7 +345,7 @@ filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, res
         details: { name: request.file.originalname, sizeBytes: request.file.size, checksum, mimeType: request.file.mimetype, scanStatus },
       });
       await client.query('COMMIT');
-      response.status(201).json({ file: await mapFile(result.rows[0]) });
+      response.status(201).json({ file: await mapFile(result.rows[0], access.projectRole) });
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -448,7 +452,7 @@ filesRouter.post('/nas', asyncHandler(async (request, response) => {
       request.ip || null,
     ],
   );
-  response.status(201).json({ file: await mapFile(result.rows[0]) });
+  response.status(201).json({ file: await mapFile(result.rows[0], access.projectRole) });
 }));
 
 filesRouter.get('/:fileId/content', asyncHandler(async (request, response, next) => {
@@ -474,6 +478,10 @@ filesRouter.get('/:fileId/content', asyncHandler(async (request, response, next)
   );
   if (!access) {
     response.status(403).json({ error: '您没有查看该文件的权限。' });
+    return;
+  }
+  if (access.projectRole === 'client' && file.fileType === 'source') {
+    response.status(403).json({ error: '客户账号不能访问源文件。' });
     return;
   }
 
@@ -527,7 +535,7 @@ filesRouter.post('/:fileId/restore', asyncHandler(async (request, response) => {
     await client.query('UPDATE project_files SET deleted_at = NULL WHERE id = $1', [file.id]);
     await recordAuditLog(client, request, { action: AUDIT_EVENTS.FILE_RESTORE, projectId: file.projectId, entityType: 'file', entityId: file.id, details: { name: file.name } });
     await client.query('COMMIT');
-    response.json({ file: await mapFile(file) });
+    response.json({ file: await mapFile(file, access.projectRole) });
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

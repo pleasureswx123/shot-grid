@@ -18,7 +18,7 @@
     "test": "npm run test:unit",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
-    "test:unit": "tsx --test server/security.test.ts server/permissions.test.ts server/storage.test.ts server/entityValidation.test.ts server/workflow.test.ts server/reviews.test.ts src/context/projectState.test.ts src/api/adapters.test.ts src/utils/assetImport.test.ts",
+    "test:unit": "tsx --test server/security.test.ts server/permissions.test.ts server/storage.test.ts server/entityValidation.test.ts server/workflow.test.ts server/reviews.test.ts server/versions.test.ts src/context/projectState.test.ts src/api/adapters.test.ts src/utils/assetImport.test.ts",
     "test:server": "tsx --test server/routes.integration.test.ts",
     "test:integration": "npm run test:server"
   },

@@ -5,6 +5,7 @@ import { pool } from './db';
 import { asyncHandler, readString, requireProjectAccessFromRequest, requireProjectWriteAccess, requireProjectWriteAccessFromRequest } from './apiUtils';
 import { isApiEntityType, validateEntityBelongsToProject } from './entityValidation';
 import { assertTaskStatusTransition, recalculateEntityStatus } from './workflow';
+import { getProjectPermissionContext } from './permissions';
 
 export const tasksRouter = Router();
 
@@ -45,6 +46,8 @@ const replaceDependencies = async (client: any, taskId: string, projectId: strin
 
 tasksRouter.get('/', asyncHandler(async (req, res) => {
   const projectId = await requireProjectAccessFromRequest(req, res); if (!projectId) return;
+  const context = await getProjectPermissionContext(projectId, req.authUser!.id, req.authUser!.role);
+  if (context.projectRole === 'client') { res.json({ tasks: [] }); return; }
   const result = await pool.query(`${selectTask} WHERE t.project_id=$1 AND t.deleted_at IS NULL ORDER BY t.updated_at DESC`, [projectId]);
   res.json({ tasks: result.rows });
 }));

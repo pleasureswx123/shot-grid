@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { pool } from './db';
 import { asyncHandler, readNumber, readString, requireProjectAccessFromRequest } from './apiUtils';
+import { getProjectPermissionContext } from './permissions';
 
 export type SearchResultType = 'shot' | 'asset' | 'file';
 
@@ -25,6 +26,8 @@ export const searchRouter = Router();
 searchRouter.get('/', asyncHandler(async (request, response) => {
   const projectId = await requireProjectAccessFromRequest(request, response);
   if (!projectId) return;
+  const context = await getProjectPermissionContext(projectId, request.authUser!.id, request.authUser!.role);
+  const isClient = context.projectRole === 'client';
 
   const q = readString(request.query.q);
   const types = parseTypes(request.query.types);
@@ -66,13 +69,16 @@ searchRouter.get('/', asyncHandler(async (request, response) => {
 
   if (types.includes('file')) {
     const files = await pool.query(
-      `SELECT id, 'file' AS type, name AS title, entity_code AS subtitle, nas_path AS detail, entity_type AS "entityType", entity_id AS "entityId"
+      `SELECT id, 'file' AS type, name AS title, entity_code AS subtitle,
+              CASE WHEN $4::boolean THEN NULL ELSE nas_path END AS detail,
+              entity_type AS "entityType", entity_id AS "entityId"
          FROM project_files
         WHERE project_id = $1 AND deleted_at IS NULL
+          AND ($4::boolean = false OR file_type = 'review')
           AND (name ILIKE $2 ESCAPE '\\' OR entity_code ILIKE $2 ESCAPE '\\' OR nas_path ILIKE $2 ESCAPE '\\')
         ORDER BY uploaded_at DESC, name ASC
         LIMIT $3`,
-      [projectId, term, limit],
+      [projectId, term, limit, isClient],
     );
     results.files = files.rows;
   }

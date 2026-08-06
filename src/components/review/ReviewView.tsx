@@ -117,6 +117,7 @@ export const ReviewView: React.FC = () => {
     currentUser, reviewLists, selectedReviewListId, setSelectedReviewListId,
     versions, shots, notes, users, updateVersionStatus, addNote, createReviewList, submitReviewList, completeReviewList, archiveReviewList, completeReviewListParticipant, apiStatus
   } = useApp();
+  const canViewInternal = currentUser.role !== 'client';
 
   const currentPlaylist = reviewLists.find(rl => rl.id === selectedReviewListId) || reviewLists[0];
   const playlistVersions = versions.filter(v => currentPlaylist?.versionIds.includes(v.id)) ;
@@ -490,9 +491,9 @@ export const ReviewView: React.FC = () => {
                   </div>
 
                   <div className="flex items-center space-x-2">
-                    <span className="text-[11px] text-slate-400">
+                    {canViewInternal && <span className="text-[11px] text-slate-400">
                       模型: <strong className="text-emerald-300 font-normal">{activeVersion.aiParams?.modelName || 'Kling 1.5 Pro'}</strong>
-                    </span>
+                    </span>}
                   </div>
                 </div>
               )}
@@ -504,7 +505,7 @@ export const ReviewView: React.FC = () => {
               <div className="bg-black rounded-xl border border-indigo-500/50 p-2 relative flex flex-col">
                 <div className="text-xs font-mono text-indigo-300 mb-1 flex justify-between font-bold">
                   <span>版本 A (当前): {activeVersion?.versionNumber}</span>
-                  <span>{activeVersion?.aiParams?.modelName}</span>
+                  {canViewInternal && <span>{activeVersion?.aiParams?.modelName}</span>}
                 </div>
                 <div className="flex-1 relative rounded overflow-hidden">
                   <ReviewMediaPreview version={activeVersion} alt="A" />
@@ -650,7 +651,7 @@ export const ReviewView: React.FC = () => {
           </div>
 
           {/* AI Prompt Collapsible Details */}
-          {activeVersion?.aiParams && (
+          {canViewInternal && activeVersion?.aiParams && (
             <div className="pt-3 border-t border-slate-800 space-y-1 text-xs">
               <span className="text-[10px] text-slate-500 font-semibold block">版本 AI 提示词</span>
               <p className="text-[11px] font-mono text-emerald-300 bg-black/60 p-2.5 rounded border border-slate-800 line-clamp-3 select-all">

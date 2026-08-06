@@ -5,6 +5,7 @@ import { asyncHandler, readString, requireProjectAccessFromRequest, UUID_PATTERN
 import { validateEntityBelongsToProject } from './entityValidation';
 import { AUDIT_EVENTS, recordAuditLog } from './audit';
 import { canReviewVersion, canSubmitVersion, getProjectPermissionContext } from './permissions';
+import { serializeVersionForRole } from './versionSerialization';
 import { applyVersionStatusEffects, assertVersionStatusTransition, isEntityLockedForNonAdmin, recalculateEntityStatus } from './workflow';
 
 export const versionsRouter = Router();
@@ -40,8 +41,19 @@ const respondWithBlockingMandatoryNotes = (res: Response, noteIds: string[]) => 
 versionsRouter.get('/', asyncHandler(async (req, res) => {
   const projectId = await requireProjectAccessFromRequest(req, res);
   if (!projectId) return;
+  const context = await getProjectPermissionContext(projectId, req.authUser!.id, req.authUser!.role);
   const r = await pool.query(`${versionSelect} WHERE deleted_at IS NULL AND task_id IN (SELECT id FROM tasks WHERE project_id=$1 AND deleted_at IS NULL) ORDER BY created_at DESC`, [projectId]);
-  res.json({ versions: r.rows });
+  res.json({ versions: r.rows.map(version => serializeVersionForRole(version, context)) });
+}));
+
+versionsRouter.get('/:id', asyncHandler(async (req, res) => {
+  const result = await pool.query(`${versionSelect} WHERE id=$1 AND deleted_at IS NULL`, [req.params.id]);
+  if (!result.rowCount) { res.status(404).json({ error: '版本不存在。' }); return; }
+  const project = await pool.query('SELECT t.project_id FROM versions v JOIN tasks t ON t.id=v.task_id WHERE v.id=$1 AND t.deleted_at IS NULL', [req.params.id]);
+  if (!project.rowCount) { res.status(404).json({ error: '版本不存在。' }); return; }
+  const context = await getProjectPermissionContext(project.rows[0].project_id, req.authUser!.id, req.authUser!.role);
+  if (!context.projectRole) { res.status(403).json({ error: '您不是该项目的成员。' }); return; }
+  res.json({ version: serializeVersionForRole(result.rows[0], context) });
 }));
 
 versionsRouter.post('/', asyncHandler(async (req, res) => {
@@ -73,7 +85,8 @@ versionsRouter.post('/', asyncHandler(async (req, res) => {
     const r = await client.query(`${versionSelect} WHERE id=$1 AND deleted_at IS NULL`, [id]);
     await recordAuditLog(client, req, { action: AUDIT_EVENTS.VERSION_SUBMIT, projectId, entityType: 'version', entityId: id, details: { taskId: req.body.taskId, entityType, entityId, versionNumber: readString(req.body?.versionNumber, 'V001'), fileId, status: readString(req.body?.status, '待审核') } });
     await client.query('COMMIT');
-    res.status(201).json({ version: r.rows[0] });
+    const context = await getProjectPermissionContext(projectId, req.authUser!.id, req.authUser!.role);
+    res.status(201).json({ version: serializeVersionForRole(r.rows[0], context) });
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -118,7 +131,8 @@ versionsRouter.patch('/:id/status', asyncHandler(async (req, res) => {
       });
     }
     await client.query('COMMIT');
-    res.json({ version: r.rows[0] });
+    const context = await getProjectPermissionContext(a.rows[0].project_id, req.authUser!.id, req.authUser!.role);
+    res.json({ version: serializeVersionForRole(r.rows[0], context) });
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -154,7 +168,8 @@ versionsRouter.patch('/:id', asyncHandler(async (req, res) => {
       await recordAuditLog(client, req, { action: nextStatus === '最终版' ? AUDIT_EVENTS.VERSION_FINAL_SET : AUDIT_EVENTS.VERSION_STATUS_CHANGE, projectId: a.rows[0].project_id, entityType: 'version', entityId: req.params.id, details: { from: a.rows[0].status, to: nextStatus } });
     }
     await client.query('COMMIT');
-    res.json({ version: r.rows[0] });
+    const context = await getProjectPermissionContext(a.rows[0].project_id, req.authUser!.id, req.authUser!.role);
+    res.json({ version: serializeVersionForRole(r.rows[0], context) });
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

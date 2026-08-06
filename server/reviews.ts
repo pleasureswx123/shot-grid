@@ -50,7 +50,7 @@ const requireProjectRouteAccess = async (
   userId: string,
   systemRole: string,
   capability: 'view' | 'create' | 'edit' | 'delete' = 'view',
-): Promise<{ ok: true; isAdmin: boolean } | { ok: false; status: number; error: string }> => {
+): Promise<{ ok: true; isAdmin: boolean; isClient: boolean } | { ok: false; status: number; error: string }> => {
   if (!UUID_PATTERN.test(projectId)) return { ok: false, status: 400, error: '项目 ID 无效。' };
   const context = await getProjectPermissionContext(projectId, userId, systemRole);
   const ok = capability === 'view'
@@ -59,7 +59,7 @@ const requireProjectRouteAccess = async (
       ? canCreateReviewList(context)
       : canEditProject(context);
   if (!ok) return { ok: false, status: 403, error: '您没有操作该审核单的权限。' };
-  return { ok: true, isAdmin: systemRole === 'admin' || context.projectRole === 'admin' || context.projectRole === 'director' };
+  return { ok: true, isAdmin: systemRole === 'admin' || context.projectRole === 'admin' || context.projectRole === 'director', isClient: context.projectRole === 'client' };
 };
 
 const getReviewListProjectId = async (id: string): Promise<string | null> => {
@@ -118,7 +118,13 @@ projectReviewListsRouter.get('/', asyncHandler(async (request, response) => {
   const projectId = request.params.projectId;
   const access = await requireProjectRouteAccess(projectId, request.authUser!.id, request.authUser!.role, 'view');
   if (access.ok !== true) return void response.status(access.status).json({ error: access.error });
-  const result = await pool.query(`${selectReviewLists} WHERE rl.project_id = $1 AND rl.deleted_at IS NULL GROUP BY rl.id ORDER BY rl.review_date DESC, rl.created_at DESC`, [projectId]);
+  const result = await pool.query(`${selectReviewLists}
+    WHERE rl.project_id = $1 AND rl.deleted_at IS NULL
+      AND ($3::boolean = false OR EXISTS (
+        SELECT 1 FROM review_list_participants visible
+        WHERE visible.review_list_id = rl.id AND visible.user_id = $2
+      ))
+    GROUP BY rl.id ORDER BY rl.review_date DESC, rl.created_at DESC`, [projectId, request.authUser!.id, access.isClient]);
   response.json({ reviewLists: result.rows });
 }));
 
