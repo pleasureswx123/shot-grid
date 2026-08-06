@@ -48,6 +48,7 @@ export interface AIGenerationParams {
   isPostProcessed?: boolean; // 是否经过后期修复
   rawGenerationUrl?: string; // 原始生成文件
   nasPath?: string;          // NAS源文件路径 e.g. \\NAS\NOMUD\EP01\SC03\SH010\video\v004\
+  nasPlaybackUnsupported?: boolean;
 }
 
 export interface Version {
@@ -230,6 +231,8 @@ export interface ProjectFile {
   sizeBytes?: number;
   url: string;
   contentUrl?: string | null;
+  storageKind?: 'managed' | 'nas';
+  nasStreamable?: boolean;
   nasPath?: string;
   entityType: EntityType;
   entityId: string;
@@ -270,4 +273,27 @@ export interface DepartmentChannel {
   unreadCount: number;
   isPrivate?: boolean;
   memberIds?: string[];
+}
+
+export type SearchResultType = 'shot' | 'asset' | 'file';
+
+export interface SearchResultItem {
+  id: string;
+  type: SearchResultType;
+  title: string;
+  subtitle?: string | null;
+  detail?: string | null;
+  entityType?: EntityType;
+  entityId?: string;
+}
+
+export interface SearchResponse {
+  query: string;
+  types: SearchResultType[];
+  limit: number;
+  results: {
+    shots: SearchResultItem[];
+    assets: SearchResultItem[];
+    files: SearchResultItem[];
+  };
 }

@@ -82,7 +82,16 @@ interface ReviewMediaPreviewProps {
   alt: string;
 }
 
+const PathOnlyNotice: React.FC<{ nasPath?: string }> = ({ nasPath }) => (
+  <div className="flex h-full flex-col items-center justify-center bg-slate-950 p-6 text-center text-slate-400">
+    <FileVideo className="mb-3 h-10 w-10 text-amber-400" />
+    <p className="text-sm font-semibold text-amber-200">路径引用，不支持在线播放</p>
+    {nasPath && <p className="mt-2 max-w-lg break-all font-mono text-[11px] text-slate-500">{nasPath}</p>}
+  </div>
+);
+
 const ReviewMediaPreview: React.FC<ReviewMediaPreviewProps> = ({ version, alt }) => {
+  if (version.aiParams?.nasPlaybackUnsupported) return <PathOnlyNotice nasPath={version.aiParams.nasPath} />;
   if (version.fileType === 'video') {
     return (
       <video
@@ -406,7 +415,9 @@ export const ReviewView: React.FC = () => {
           {reviewMode === 'single' ? (
             /* Single Canvas Mode */
             <div ref={mediaContainerRef} className="flex-1 relative bg-black rounded-xl border border-slate-800 overflow-hidden flex items-center justify-center">
-              {activeVersion && activeVersion.fileType === 'video' ? (
+              {activeVersion?.aiParams?.nasPlaybackUnsupported ? (
+                <PathOnlyNotice nasPath={activeVersion.aiParams.nasPath} />
+              ) : activeVersion && activeVersion.fileType === 'video' ? (
                 <video
                   ref={videoRef}
                   src={activeVersion.fileUrl}
@@ -467,7 +478,7 @@ export const ReviewView: React.FC = () => {
               )}
 
               {/* Control Bar Overlay */}
-              {activeVersion && activeVersion.fileType === 'video' && (
+              {activeVersion && activeVersion.fileType === 'video' && !activeVersion.aiParams?.nasPlaybackUnsupported && (
                 <div className="pointer-events-none absolute top-0 inset-x-0 p-3 bg-gradient-to-b from-black/90 via-black/45 to-transparent z-30 flex items-center justify-between text-xs font-mono">
                   <div className="flex items-center space-x-3">
                     <button onClick={togglePlay} className="pointer-events-auto p-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full transition">

@@ -10,6 +10,7 @@ import { UserManagementModal } from './admin/UserManagementModal';
 import { AuditLogsModal } from './admin/AuditLogsModal';
 import { useWorkspace } from '../context/WorkspaceContext';
 import { NewProjectModal } from './project/NewProjectModal';
+import { GlobalSearch } from './GlobalSearch';
 
 interface HeaderProps {
   onOpenNewShot: () => void;
@@ -98,8 +99,9 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Right: Actions, Role Switcher, Reset */}
+      {/* Right: Search, Actions, Role Switcher */}
       <div className="flex items-center space-x-3">
+        <GlobalSearch />
         {/* Quick Add Menu */}
         <div className="relative">
           <button
