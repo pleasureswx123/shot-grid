@@ -28,6 +28,7 @@ interface ServerFile {
   sizeBytes: number;
   storageKind: 'managed' | 'nas';
   contentUrl: string | null;
+  nasStreamable?: boolean;
   nasPath: string | null;
   entityType: 'shot' | 'asset' | null;
   entityCode: string | null;
@@ -131,6 +132,7 @@ const AddFileModal: React.FC<AddFileModalProps> = ({ projectId, onClose, onCreat
         projectId,
         name: nasName.trim(),
         nasPath: nasPath.trim(),
+        fileType,
         entityType: entityType === 'project' ? '' : entityType,
         entityCode: entityCode.trim(),
         versionNumber: versionNumber.trim(),
@@ -245,8 +247,7 @@ const AddFileModal: React.FC<AddFileModalProps> = ({ projectId, onClose, onCreat
           )}
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            {mode === 'upload' && (
-              <label className="text-xs text-slate-400">
+            <label className="text-xs text-slate-400">
                 文件用途
                 <select
                   value={fileType}
@@ -257,7 +258,6 @@ const AddFileModal: React.FC<AddFileModalProps> = ({ projectId, onClose, onCreat
                   <option value="source">工程源文件</option>
                 </select>
               </label>
-            )}
             <label className="text-xs text-slate-400">
               关联范围
               <select
@@ -483,8 +483,11 @@ export const FilesView: React.FC = () => {
                         : 'bg-amber-500/20 text-amber-300'
                     }`}>
                       {file.storageKind === 'managed' ? <HardDrive className="h-3 w-3" /> : <Link2 className="h-3 w-3" />}
-                      {file.storageKind === 'managed' ? '服务器托管' : 'NAS 路径'}
+                      {file.storageKind === 'managed' ? '服务器托管' : file.nasStreamable ? 'NAS 可播放' : 'NAS 路径引用'}
                     </span>
+                    {file.storageKind === 'nas' && !file.nasStreamable && (
+                      <p className="mt-1 text-[10px] text-slate-500">路径引用，不支持在线播放</p>
+                    )}
                   </td>
                   <td className="p-3 font-mono font-bold text-indigo-300">
                     {file.entityCode || '项目'}
