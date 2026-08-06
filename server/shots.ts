@@ -18,7 +18,9 @@ const selectShot = `SELECT sh.id, sh.project_id AS "projectId", sh.scene_id AS "
 
 const selectTask = `SELECT id, project_id AS "projectId", title, entity_type AS "entityType", entity_id AS "entityId",
   pipeline_stage AS "pipelineStage", assignee_id AS "assigneeId", status, priority, due_date AS "dueDate",
-  requirements, prerequisite_task_id AS "prerequisiteTaskId", latest_version_id AS "latestVersionId",
+  requirements, prerequisite_task_id AS "prerequisiteTaskId",
+  coalesce((SELECT array_agg(d.prerequisite_task_id ORDER BY d.created_at) FROM task_dependencies d WHERE d.task_id=tasks.id), '{}') AS "prerequisiteTaskIds",
+  latest_version_id AS "latestVersionId",
   created_at AS "createdAt" FROM tasks`;
 
 const selectScene = `SELECT sc.id, sc.project_id AS "projectId", sc.scene_code AS "sceneCode", sc.name,

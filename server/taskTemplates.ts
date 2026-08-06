@@ -38,6 +38,11 @@ export async function insertTaskChain(client: PoolClient, options: {
     if (existing.rowCount) {
       const existingId = existing.rows[0].id;
       await client.query('UPDATE tasks SET prerequisite_task_id=$2 WHERE id=$1', [existingId, prerequisiteTaskId]);
+      await client.query('DELETE FROM task_dependencies WHERE task_id=$1', [existingId]);
+      if (prerequisiteTaskId) await client.query(
+        'INSERT INTO task_dependencies (task_id,prerequisite_task_id) VALUES ($1,$2)',
+        [existingId, prerequisiteTaskId],
+      );
       prerequisiteTaskId = existingId;
       continue;
     }
@@ -48,6 +53,10 @@ export async function insertTaskChain(client: PoolClient, options: {
       [id, options.projectId, `${options.label} - ${item.stage}`, options.entityType, options.entityId,
         item.stage, options.assigneeId, index === 0 ? (options.firstStatus || '未开始') : '已阻塞',
         item.dueInDays, `${options.label} 的${item.stage}阶段制作要求`, prerequisiteTaskId],
+    );
+    if (prerequisiteTaskId) await client.query(
+      'INSERT INTO task_dependencies (task_id,prerequisite_task_id) VALUES ($1,$2)',
+      [id, prerequisiteTaskId],
     );
     prerequisiteTaskId = id;
   }
