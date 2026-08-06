@@ -5,6 +5,7 @@ import {
   Link as LinkIcon, FileSpreadsheet
 } from 'lucide-react';
 import { Asset, AssetCategory } from '../../types';
+import { TaskDetailCard } from '../tasks/TaskDetailCard';
 
 interface AssetsViewProps {
   onOpenNewAsset: () => void;
@@ -17,7 +18,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   onOpenImportAssets,
   onOpenNewVersion,
 }) => {
-  const { assets, users, shots, versions, selectedAssetId, setSelectedAssetId, setSelectedShotId, setActiveTab, deleteAsset } = useApp();
+  const { assets, users, shots, tasks, versions, selectedAssetId, setSelectedAssetId, setSelectedShotId, setActiveTab, deleteAsset } = useApp();
 
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -42,6 +43,7 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
   const activeAsset = assets.find(a => a.id === selectedAssetId);
   const activeAssetShots = shots.filter(s => activeAsset?.usedInShotIds.includes(s.id) || s.assetIds.includes(activeAsset?.id || ''));
   const activeAssetVersions = versions.filter(v => v.entityId === activeAsset?.id);
+  const activeAssetTasks = tasks.filter(task => task.entityType === 'asset' && task.entityId === activeAsset?.id);
   const handleDeleteAsset = async () => {
     if (!activeAsset) return;
     const message = `确定删除资产 ${activeAsset.name}？\n\n` +
@@ -218,6 +220,16 @@ export const AssetsView: React.FC<AssetsViewProps> = ({
             </div>
 
             {/* Description & Prompt Template */}
+            <section className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold text-white">任务详情</h3>
+                <span className="text-[10px] text-slate-500">共 {activeAssetTasks.length} 项</span>
+              </div>
+              {activeAssetTasks.length > 0
+                ? activeAssetTasks.map(task => <TaskDetailCard key={task.id} task={task} />)
+                : <div className="rounded-xl border border-dashed border-slate-700 p-5 text-center text-xs text-slate-500">该资产暂无任务</div>}
+            </section>
+
             <div className="space-y-3 bg-slate-800/40 p-4 rounded-xl border border-slate-800 text-xs">
               <div>
                 <span className="text-slate-500 font-semibold block mb-1">资产设定说明</span>
