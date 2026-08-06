@@ -51,7 +51,7 @@ interface AppContextType {
   addShot: (shotData: Partial<Shot>) => Promise<void>;
   updateShots: (
     shotIds: string[],
-    updates: Partial<Pick<Shot, 'sceneCode' | 'assigneeId' | 'status'>>,
+    updates: Partial<Pick<Shot, 'sceneCode' | 'assigneeId'>>,
   ) => Promise<void>;
   deleteShot: (shotId: string) => Promise<void>;
   deleteShots: (shotIds: string[]) => Promise<void>;
@@ -657,7 +657,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
 
   const updateShots = async (
     shotIds: string[],
-    updates: Partial<Pick<Shot, 'sceneCode' | 'assigneeId' | 'status'>>,
+    updates: Partial<Pick<Shot, 'sceneCode' | 'assigneeId'>>,
   ): Promise<void> => {
     if (currentUser.role !== 'admin' && currentUser.role !== 'director') {
       reportApiError(new Error('权限不足，只有管理员或导演可以批量编辑镜头。'), '权限不足，无法更新镜头。');

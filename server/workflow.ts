@@ -81,39 +81,51 @@ export const applyVersionStatusEffects = async (
   }
 };
 
-export const recomputeEntityWorkflow = async (
+export type EntityStatus = '未开始' | '制作中' | '审核中' | '已完成' | '已定稿' | '已锁定';
+
+/**
+ * Derive an entity status from all of its live tasks. The order here is
+ * intentional: an explicit entity lock wins, then review, active work, full
+ * completion, and finally the initial state. A blocked task is active work.
+ */
+export const deriveEntityStatus = (
+  entityType: Exclude<WorkflowEntityType, 'project'>,
+  tasks: Array<{ status: TaskStatus }>,
+  isLocked: boolean,
+): EntityStatus => {
+  if (isLocked) return '已锁定';
+  if (tasks.some(task => task.status === '待审核')) return '审核中';
+  if (tasks.some(task => ['制作中', '修改中', '已阻塞'].includes(task.status))) return '制作中';
+  if (tasks.length > 0 && tasks.every(task => task.status === '已完成')) return entityType === 'shot' ? '已完成' : '已定稿';
+  return '未开始';
+};
+
+export const recalculateEntityStatus = async (
   client: PoolClient | Pool,
   entityType: WorkflowEntityType,
   entityId: string,
 ): Promise<void> => {
   if (entityType === 'project') return;
+  const table = entityType === 'shot' ? 'shots' : 'assets';
+  const entity = await client.query(`SELECT status FROM ${table} WHERE id=$1 AND deleted_at IS NULL`, [entityId]);
+  if (!entity.rowCount) return;
   const result = await client.query(
-    `SELECT pipeline_stage, status,
-       EXISTS (
-         SELECT 1 FROM versions v
-         WHERE v.task_id=tasks.id AND v.status='最终版' AND v.deleted_at IS NULL
-       ) AS has_final
-     FROM tasks
+    `SELECT pipeline_stage, status FROM tasks
      WHERE entity_type=$1 AND entity_id=$2 AND deleted_at IS NULL
      ORDER BY CASE WHEN status='已阻塞' THEN 1 ELSE 0 END, updated_at, id`,
     [entityType, entityId],
   );
-  if (!result.rows.length) return;
-  const tasks = result.rows as Array<{ pipeline_stage: string; status: TaskStatus; has_final: boolean }>;
+  const tasks = result.rows as Array<{ pipeline_stage: string; status: TaskStatus }>;
   const current = tasks.find(task => task.status !== '已完成') ?? tasks[tasks.length - 1];
-  const allCompleted = tasks.every(task => task.status === '已完成');
-  const locked = allCompleted && tasks.some(task => task.has_final);
-  const reviewing = tasks.some(task => task.status === '待审核');
-  const active = tasks.some(task => ['制作中', '修改中'].includes(task.status));
-  const derivedStatus = locked ? '已锁定'
-    : allCompleted ? (entityType === 'shot' ? '已完成' : '已定稿')
-      : reviewing ? '审核中'
-        : active ? '制作中' : '未开始';
+  const derivedStatus = deriveEntityStatus(entityType, tasks, entity.rows[0].status === '已锁定');
   if (entityType === 'shot') {
-    await client.query('UPDATE shots SET current_stage=$1,status=$2 WHERE id=$3', [current.pipeline_stage, derivedStatus, entityId]);
+    await client.query('UPDATE shots SET current_stage=coalesce($1,current_stage),status=$2 WHERE id=$3', [current?.pipeline_stage ?? null, derivedStatus, entityId]);
   } else {
     await client.query('UPDATE assets SET status=$1 WHERE id=$2', [derivedStatus, entityId]);
   }
 };
+
+// Transitional alias for callers outside the workflow routes.
+export const recomputeEntityWorkflow = recalculateEntityStatus;
 
 export const isEntityLockedForNonAdmin = (status: string | null | undefined): boolean => status === '已锁定';

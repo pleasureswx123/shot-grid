@@ -4,7 +4,7 @@ import { AUDIT_EVENTS, recordAuditLog } from './audit';
 import { pool } from './db';
 import { asyncHandler, readString, requireProjectAccessFromRequest, requireProjectWriteAccess, requireProjectWriteAccessFromRequest } from './apiUtils';
 import { isApiEntityType, validateEntityBelongsToProject } from './entityValidation';
-import { assertTaskStatusTransition } from './workflow';
+import { assertTaskStatusTransition, recalculateEntityStatus } from './workflow';
 
 export const tasksRouter = Router();
 
@@ -104,6 +104,9 @@ tasksRouter.patch('/:id', asyncHandler(async (req, res) => {
     if (dependenciesProvided) await replaceDependencies(client, id, previous.project_id, readPrerequisiteIds(req.body));
     const result = await client.query(`${selectTask} WHERE t.id=$1`, [id]);
     const updated = result.rows[0];
+    if (nextStatus !== null && (previous.entity_type === 'shot' || previous.entity_type === 'asset')) {
+      await recalculateEntityStatus(client, previous.entity_type, previous.entity_id);
+    }
     if (nextStatus !== null && updated.status !== previous.status) await recordAuditLog(client, req, { action: AUDIT_EVENTS.TASK_STATUS_CHANGE, projectId: previous.project_id, entityType: 'task', entityId: id, details: { from: previous.status, to: updated.status } });
     if (nextAssignee !== null && updated.assigneeId !== previous.assignee_id) await recordAuditLog(client, req, { action: AUDIT_EVENTS.TASK_ASSIGNEE_CHANGE, projectId: previous.project_id, entityType: 'task', entityId: id, details: { from: previous.assignee_id, to: updated.assigneeId } });
     if (nextDueDate !== null && String(updated.dueDate) !== String(previous.due_date)) await recordAuditLog(client, req, { action: AUDIT_EVENTS.TASK_DUE_DATE_CHANGE, projectId: previous.project_id, entityType: 'task', entityId: id, details: { from: previous.due_date, to: updated.dueDate } });

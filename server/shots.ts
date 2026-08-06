@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import { AUDIT_EVENTS, recordAuditLog } from './audit';
 import { pool } from './db';
-import { isEntityLockedForNonAdmin } from './workflow';
+import { isEntityLockedForNonAdmin, recalculateEntityStatus } from './workflow';
 import { asyncHandler, readNumber, readString, requireProjectAccessFromRequest, requireProjectWriteAccess, requireProjectWriteAccessFromRequest, UUID_PATTERN } from './apiUtils';
 import { ensureShotStorageStructure, removeShotStorageStructure } from './storage';
 import { insertTaskChain, SHOT_TASK_TEMPLATE } from './taskTemplates';
@@ -46,6 +46,7 @@ shotsRouter.get('/', asyncHandler(async (request, response) => {
 
 shotsRouter.post('/', asyncHandler(async (request, response) => {
   const projectId = await requireProjectWriteAccessFromRequest(request, response); if (!projectId) return;
+  if (request.body?.status !== undefined && request.authUser!.role !== 'admin') { response.status(403).json({ error: '镜头状态由任务自动推导，仅管理员可执行锁定或恢复。' }); return; }
   const sceneCode = readString(request.body?.sceneCode, 'SC01').toUpperCase();
   const shotCode = readString(request.body?.shotCode).toUpperCase();
   if (!/^[A-Z0-9._-]{1,40}$/.test(sceneCode) || !/^[A-Z0-9._-]{1,40}$/.test(shotCode)) { response.status(400).json({ error: '场次或镜头编号无效。' }); return; }
@@ -128,6 +129,8 @@ shotsRouter.patch('/:id', asyncHandler(async (request, response) => {
   const id = request.params.id; if (!UUID_PATTERN.test(id)) { response.status(400).json({ error: '镜头 ID 无效。' }); return; }
   const access = await pool.query('SELECT project_id,status,assignee_id,description FROM shots WHERE id=$1 AND deleted_at IS NULL', [id]); if (!access.rowCount) { response.status(404).json({ error: '镜头不存在。' }); return; }
   if (!await requireProjectWriteAccess(access.rows[0].project_id, request.authUser!.id, request.authUser!.role)) { response.status(403).json({ error: '您不是该项目的成员。' }); return; }
+  if (request.body?.status !== undefined && request.authUser!.role !== 'admin') { response.status(403).json({ error: '镜头状态由任务自动推导，仅管理员可执行锁定或恢复。' }); return; }
+  if (request.body?.status !== undefined && !['已锁定', '恢复'].includes(request.body.status)) { response.status(400).json({ error: '管理员只能明确锁定或恢复镜头。' }); return; }
   if (isEntityLockedForNonAdmin(access.rows[0].status) && request.authUser!.role !== 'admin') { response.status(403).json({ error: '最终版已锁定，仅管理员可继续修改。' }); return; }
   let sceneId: string | null = null;
   const sceneCode = typeof request.body?.sceneCode === 'string' ? request.body.sceneCode.trim().toUpperCase() : '';
@@ -136,7 +139,9 @@ shotsRouter.patch('/:id', asyncHandler(async (request, response) => {
     const scene = await pool.query(`INSERT INTO scenes (id, project_id, scene_code, name, description) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (project_id, scene_code) DO UPDATE SET scene_code = EXCLUDED.scene_code RETURNING id`, [randomUUID(), access.rows[0].project_id, sceneCode, `场次 ${sceneCode}`, '批量编辑创建的场次']);
     sceneId = scene.rows[0].id;
   }
-  await pool.query(`UPDATE shots SET scene_id=coalesce($2,scene_id), assignee_id=coalesce($3,assignee_id), status=coalesce($4,status), description=coalesce($5,description) WHERE id=$1`, [id, sceneId, request.body?.assigneeId ?? null, request.body?.status ?? null, request.body?.description ?? null]);
+  const requestedStatus = request.body?.status === '已锁定' ? '已锁定' : request.body?.status === '恢复' ? '未开始' : null;
+  await pool.query(`UPDATE shots SET scene_id=coalesce($2,scene_id), assignee_id=coalesce($3,assignee_id), status=coalesce($4,status), description=coalesce($5,description) WHERE id=$1`, [id, sceneId, request.body?.assigneeId ?? null, requestedStatus, request.body?.description ?? null]);
+  if (request.body?.status === '恢复') await recalculateEntityStatus(pool, 'shot', id);
   const nextAssetIds = Array.isArray(request.body?.assetIds) ? request.body.assetIds.filter((value: unknown) => typeof value === 'string' && UUID_PATTERN.test(value)) : null;
   if (nextAssetIds) {
     const beforeAssets = await pool.query('SELECT asset_id FROM shot_assets WHERE shot_id=$1 ORDER BY asset_id', [id]);

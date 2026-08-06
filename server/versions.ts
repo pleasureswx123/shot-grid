@@ -5,7 +5,7 @@ import { asyncHandler, readString, requireProjectAccessFromRequest, UUID_PATTERN
 import { validateEntityBelongsToProject } from './entityValidation';
 import { AUDIT_EVENTS, recordAuditLog } from './audit';
 import { canReviewVersion, canSubmitVersion, getProjectPermissionContext } from './permissions';
-import { applyVersionStatusEffects, assertVersionStatusTransition, isEntityLockedForNonAdmin, recomputeEntityWorkflow } from './workflow';
+import { applyVersionStatusEffects, assertVersionStatusTransition, isEntityLockedForNonAdmin, recalculateEntityStatus } from './workflow';
 
 export const versionsRouter = Router();
 
@@ -68,7 +68,7 @@ versionsRouter.post('/', asyncHandler(async (req, res) => {
     await client.query('UPDATE tasks SET latest_version_id=$1,status=$2 WHERE id=$3', [id, '待审核', req.body.taskId]);
     if (entityType !== 'project') {
       await client.query(`UPDATE ${entityType === 'shot' ? 'shots' : 'assets'} SET latest_version_id=$1,thumbnail_url=coalesce(nullif($2,''),thumbnail_url) WHERE id=$3`, [id, readString(req.body?.thumbnailUrl), entityId]);
-      await recomputeEntityWorkflow(client, entityType, entityId);
+      await recalculateEntityStatus(client, entityType, entityId);
     }
     const r = await client.query(`${versionSelect} WHERE id=$1 AND deleted_at IS NULL`, [id]);
     await recordAuditLog(client, req, { action: AUDIT_EVENTS.VERSION_SUBMIT, projectId, entityType: 'version', entityId: id, details: { taskId: req.body.taskId, entityType, entityId, versionNumber: readString(req.body?.versionNumber, 'V001'), fileId, status: readString(req.body?.status, '待审核') } });
@@ -128,7 +128,7 @@ versionsRouter.patch('/:id/status', asyncHandler(async (req, res) => {
 }));
 
 versionsRouter.patch('/:id', asyncHandler(async (req, res) => {
-  const a = await pool.query('SELECT t.project_id,v.entity_type,v.entity_id,v.status FROM versions v JOIN tasks t ON t.id=v.task_id WHERE v.id=$1 AND v.deleted_at IS NULL', [req.params.id]);
+  const a = await pool.query('SELECT t.project_id,v.task_id,v.entity_type,v.entity_id,v.status FROM versions v JOIN tasks t ON t.id=v.task_id WHERE v.id=$1 AND v.deleted_at IS NULL', [req.params.id]);
   if (!a.rowCount) { res.status(404).json({ error: '版本不存在。' }); return; }
   if (!canReviewVersion(await getProjectPermissionContext(a.rows[0].project_id, req.authUser!.id, req.authUser!.role))) { res.status(403).json({ error: '您没有审核版本的权限。' }); return; }
   if (a.rows[0].status === '最终版' && req.authUser!.role !== 'admin') { res.status(403).json({ error: '最终版已锁定，仅管理员可继续修改。' }); return; }
@@ -149,7 +149,10 @@ versionsRouter.patch('/:id', asyncHandler(async (req, res) => {
   try {
     await client.query('BEGIN');
     const r = await client.query(`WITH updated AS (UPDATE versions SET status=$2 WHERE id=$1 AND deleted_at IS NULL RETURNING *) ${versionSelect.replace('FROM versions', 'FROM updated')}`, [req.params.id, nextStatus]);
-    if (nextStatus !== a.rows[0].status) await recordAuditLog(client, req, { action: nextStatus === '最终版' ? AUDIT_EVENTS.VERSION_FINAL_SET : AUDIT_EVENTS.VERSION_STATUS_CHANGE, projectId: a.rows[0].project_id, entityType: 'version', entityId: req.params.id, details: { from: a.rows[0].status, to: nextStatus } });
+    if (nextStatus !== a.rows[0].status) {
+      await applyVersionStatusEffects(client, { id: req.params.id, task_id: a.rows[0].task_id, entity_type: a.rows[0].entity_type, entity_id: a.rows[0].entity_id }, nextStatus);
+      await recordAuditLog(client, req, { action: nextStatus === '最终版' ? AUDIT_EVENTS.VERSION_FINAL_SET : AUDIT_EVENTS.VERSION_STATUS_CHANGE, projectId: a.rows[0].project_id, entityType: 'version', entityId: req.params.id, details: { from: a.rows[0].status, to: nextStatus } });
+    }
     await client.query('COMMIT');
     res.json({ version: r.rows[0] });
   } catch (error) {
