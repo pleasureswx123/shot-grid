@@ -115,6 +115,7 @@ export interface Task {
   dueDate: string;
   requirements: string;
   prerequisiteTaskId?: string; // 前置任务
+  prerequisiteTaskIds?: string[]; // 全部前置任务；prerequisiteTaskId 仅用于兼容旧数据
   latestVersionId?: string;
   createdAt: string;
 }

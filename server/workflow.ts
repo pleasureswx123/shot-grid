@@ -49,22 +49,70 @@ export const applyVersionStatusEffects = async (
 ): Promise<void> => {
   if (status === '已退回') {
     await client.query('UPDATE tasks SET status=$1 WHERE id=$2', ['修改中', version.task_id]);
-    if (version.entity_type === 'shot') await client.query('UPDATE shots SET status=$1 WHERE id=$2', ['制作中', version.entity_id]);
-    if (version.entity_type === 'asset') await client.query('UPDATE assets SET status=$1 WHERE id=$2', ['审核中', version.entity_id]);
+    await recomputeEntityWorkflow(client, version.entity_type, version.entity_id);
     return;
   }
 
-  if (status === '已通过') {
+  if (status === '已通过' || status === '最终版') {
     await client.query('UPDATE tasks SET status=$1 WHERE id=$2', ['已完成', version.task_id]);
-    if (version.entity_type === 'shot') await client.query('UPDATE shots SET status=$1 WHERE id=$2', ['已完成', version.entity_id]);
-    if (version.entity_type === 'asset') await client.query('UPDATE assets SET status=$1, approved_version_id=$2 WHERE id=$3', ['已定稿', version.id, version.entity_id]);
-    return;
+    await client.query(
+      `UPDATE tasks downstream
+       SET status='未开始'
+       WHERE downstream.status='已阻塞' AND downstream.deleted_at IS NULL
+         AND EXISTS (
+           SELECT 1 FROM task_dependencies dependency
+           WHERE dependency.task_id=downstream.id AND dependency.prerequisite_task_id=$1
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM task_dependencies dependency
+           JOIN tasks prerequisite ON prerequisite.id=dependency.prerequisite_task_id
+           WHERE dependency.task_id=downstream.id
+             AND (prerequisite.status<>'已完成' OR prerequisite.deleted_at IS NOT NULL)
+         )`,
+      [version.task_id],
+    );
+    if (version.entity_type === 'shot' && status === '最终版') {
+      await client.query('UPDATE shots SET latest_version_id=$1 WHERE id=$2', [version.id, version.entity_id]);
+    }
+    if (version.entity_type === 'asset') {
+      await client.query('UPDATE assets SET approved_version_id=$1 WHERE id=$2', [version.id, version.entity_id]);
+    }
+    await recomputeEntityWorkflow(client, version.entity_type, version.entity_id);
   }
+};
 
-  if (status === '最终版') {
-    await client.query('UPDATE tasks SET status=$1 WHERE id=$2', ['已完成', version.task_id]);
-    if (version.entity_type === 'shot') await client.query('UPDATE shots SET status=$1, latest_version_id=$2 WHERE id=$3', ['已锁定', version.id, version.entity_id]);
-    if (version.entity_type === 'asset') await client.query('UPDATE assets SET status=$1, approved_version_id=$2 WHERE id=$3', ['已锁定', version.id, version.entity_id]);
+export const recomputeEntityWorkflow = async (
+  client: PoolClient | Pool,
+  entityType: WorkflowEntityType,
+  entityId: string,
+): Promise<void> => {
+  if (entityType === 'project') return;
+  const result = await client.query(
+    `SELECT pipeline_stage, status,
+       EXISTS (
+         SELECT 1 FROM versions v
+         WHERE v.task_id=tasks.id AND v.status='最终版' AND v.deleted_at IS NULL
+       ) AS has_final
+     FROM tasks
+     WHERE entity_type=$1 AND entity_id=$2 AND deleted_at IS NULL
+     ORDER BY CASE WHEN status='已阻塞' THEN 1 ELSE 0 END, updated_at, id`,
+    [entityType, entityId],
+  );
+  if (!result.rows.length) return;
+  const tasks = result.rows as Array<{ pipeline_stage: string; status: TaskStatus; has_final: boolean }>;
+  const current = tasks.find(task => task.status !== '已完成') ?? tasks[tasks.length - 1];
+  const allCompleted = tasks.every(task => task.status === '已完成');
+  const locked = allCompleted && tasks.some(task => task.has_final);
+  const reviewing = tasks.some(task => task.status === '待审核');
+  const active = tasks.some(task => ['制作中', '修改中'].includes(task.status));
+  const derivedStatus = locked ? '已锁定'
+    : allCompleted ? (entityType === 'shot' ? '已完成' : '已定稿')
+      : reviewing ? '审核中'
+        : active ? '制作中' : '未开始';
+  if (entityType === 'shot') {
+    await client.query('UPDATE shots SET current_stage=$1,status=$2 WHERE id=$3', [current.pipeline_stage, derivedStatus, entityId]);
+  } else {
+    await client.query('UPDATE assets SET status=$1 WHERE id=$2', [derivedStatus, entityId]);
   }
 };
 

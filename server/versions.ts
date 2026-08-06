@@ -5,7 +5,7 @@ import { asyncHandler, readString, requireProjectAccessFromRequest, UUID_PATTERN
 import { validateEntityBelongsToProject } from './entityValidation';
 import { AUDIT_EVENTS, recordAuditLog } from './audit';
 import { canReviewVersion, canSubmitVersion, getProjectPermissionContext } from './permissions';
-import { applyVersionStatusEffects, assertVersionStatusTransition, isEntityLockedForNonAdmin } from './workflow';
+import { applyVersionStatusEffects, assertVersionStatusTransition, isEntityLockedForNonAdmin, recomputeEntityWorkflow } from './workflow';
 
 export const versionsRouter = Router();
 
@@ -66,7 +66,10 @@ versionsRouter.post('/', asyncHandler(async (req, res) => {
     await client.query('BEGIN');
     await client.query(`INSERT INTO versions (id,task_id,entity_type,entity_id,version_number,file_id,file_url,file_type,thumbnail_url,uploader_id,changelog,status,ai_params) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)`, [id, req.body.taskId, entityType, entityId, readString(req.body?.versionNumber, 'V001'), fileId, fileUrl, readString(req.body?.fileType, 'image'), readString(req.body?.thumbnailUrl), req.authUser!.id, readString(req.body?.changelog), readString(req.body?.status, '待审核'), JSON.stringify(req.body?.aiParams ?? null)]);
     await client.query('UPDATE tasks SET latest_version_id=$1,status=$2 WHERE id=$3', [id, '待审核', req.body.taskId]);
-    if (entityType !== 'project') await client.query(`UPDATE ${entityType === 'shot' ? 'shots' : 'assets'} SET latest_version_id=$1,status=$2,thumbnail_url=coalesce(nullif($3,''),thumbnail_url) WHERE id=$4`, [id, '审核中', readString(req.body?.thumbnailUrl), entityId]);
+    if (entityType !== 'project') {
+      await client.query(`UPDATE ${entityType === 'shot' ? 'shots' : 'assets'} SET latest_version_id=$1,thumbnail_url=coalesce(nullif($2,''),thumbnail_url) WHERE id=$3`, [id, readString(req.body?.thumbnailUrl), entityId]);
+      await recomputeEntityWorkflow(client, entityType, entityId);
+    }
     const r = await client.query(`${versionSelect} WHERE id=$1 AND deleted_at IS NULL`, [id]);
     await recordAuditLog(client, req, { action: AUDIT_EVENTS.VERSION_SUBMIT, projectId, entityType: 'version', entityId: id, details: { taskId: req.body.taskId, entityType, entityId, versionNumber: readString(req.body?.versionNumber, 'V001'), fileId, status: readString(req.body?.status, '待审核') } });
     await client.query('COMMIT');
