@@ -53,6 +53,44 @@ const validateMimeForExtension = (extension: string, mimeType: string): string |
   return `文件扩展名 .${extension} 与浏览器上报的 MIME 类型 ${normalizedMimeType} 不一致。`;
 };
 
+const normalizeNasComparablePath = (value: string): string => {
+  if (/^[A-Za-z]:\\/.test(value) || value.startsWith('\\\\')) {
+    return path.win32.resolve(value).toLowerCase();
+  }
+  return path.resolve(value);
+};
+
+const isNasPathWhitelisted = (nasPath: string): boolean => {
+  if (!config.nasRootWhitelist.length) return false;
+  const normalizedPath = normalizeNasComparablePath(nasPath);
+  return config.nasRootWhitelist.some((root) => {
+    const normalizedRoot = normalizeNasComparablePath(root);
+    const separator = /^[A-Za-z]:\\/.test(root) || root.startsWith('\\\\') ? '\\' : path.sep;
+    return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}${separator}`);
+  });
+};
+
+const canStreamNasFile = async (nasPath: string | null): Promise<boolean> => {
+  if (!nasPath || !isNasPathWhitelisted(nasPath)) return false;
+  try {
+    const fileStat = await stat(nasPath);
+    return fileStat.isFile();
+  } catch {
+    return false;
+  }
+};
+
+const mapFile = async (row: FileRow) => {
+  const nasStreamable = row.storageKey ? false : await canStreamNasFile(row.nasPath);
+  return {
+    ...row,
+    sizeBytes: Number(row.sizeBytes),
+    storageKind: row.storageKey ? 'managed' : 'nas',
+    contentUrl: row.storageKey || nasStreamable ? `/api/files/${row.id}/content` : null,
+    nasStreamable,
+  };
+};
+
 const scanUploadForThreats = async (filePath: string): Promise<'not_configured' | 'clean'> => {
   if (!config.virusScanCommand) return 'not_configured';
   const [command, ...args] = config.virusScanCommand.split(' ').filter(Boolean);
@@ -146,13 +184,6 @@ const getProjectAccess = async (
   };
 };
 
-const mapFile = (row: FileRow) => ({
-  ...row,
-  sizeBytes: Number(row.sizeBytes),
-  storageKind: row.storageKey ? 'managed' : 'nas',
-  contentUrl: row.storageKey ? `/api/files/${row.id}/content` : null,
-});
-
 const selectFileColumns = `
   SELECT f.id, f.project_id AS "projectId", f.name,
          f.file_type AS "fileType", f.extension,
@@ -191,7 +222,7 @@ filesRouter.get('/', asyncHandler(async (request, response) => {
       ORDER BY f.uploaded_at DESC`,
     [projectId],
   );
-  response.json({ files: result.rows.map(mapFile) });
+  response.json({ files: await Promise.all(result.rows.map(mapFile)) });
 }));
 
 filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, response) => {
@@ -310,7 +341,7 @@ filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, res
         details: { name: request.file.originalname, sizeBytes: request.file.size, checksum, mimeType: request.file.mimetype, scanStatus },
       });
       await client.query('COMMIT');
-      response.status(201).json({ file: mapFile(result.rows[0]) });
+      response.status(201).json({ file: await mapFile(result.rows[0]) });
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -329,6 +360,7 @@ filesRouter.post('/nas', asyncHandler(async (request, response) => {
   const projectId = typeof request.body?.projectId === 'string' ? request.body.projectId : '';
   const name = typeof request.body?.name === 'string' ? request.body.name.trim() : '';
   const nasPath = typeof request.body?.nasPath === 'string' ? request.body.nasPath.trim() : '';
+  const fileType = typeof request.body?.fileType === 'string' ? request.body.fileType : '';
   const entityType = typeof request.body?.entityType === 'string' && request.body.entityType
     ? request.body.entityType
     : null;
@@ -345,12 +377,13 @@ filesRouter.post('/nas', asyncHandler(async (request, response) => {
     name.length > 500 ||
     !nasPath ||
     nasPath.length > 2000 ||
+    !FILE_TYPES.has(fileType) ||
     (entityType && !ENTITY_TYPES.has(entityType))
   ) {
     response.status(400).json({ error: '共享文件信息无效。' });
     return;
   }
-  if (!nasPath.startsWith('\\\\') && !/^[A-Za-z]:\\/.test(nasPath)) {
+  if (!nasPath.startsWith('\\\\') && !/^[A-Za-z]:\\/.test(nasPath) && !path.isAbsolute(nasPath)) {
     response.status(400).json({ error: '请填写 UNC 路径（如 \\\\NAS\\项目）或服务器磁盘绝对路径。' });
     return;
   }
@@ -376,7 +409,7 @@ filesRouter.post('/nas', asyncHandler(async (request, response) => {
       INSERT INTO project_files (
         id, project_id, name, file_type, extension, nas_path,
         entity_type, entity_code, version_number, uploader_id
-      ) VALUES ($1, $2, $3, 'source', $4, $5, $6, $7, $8, $9)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     )
     SELECT i.id, i.project_id AS "projectId", i.name,
@@ -394,6 +427,7 @@ filesRouter.post('/nas', asyncHandler(async (request, response) => {
       fileId,
       projectId,
       name,
+      fileType,
       extension,
       nasPath,
       entityType,
@@ -414,7 +448,7 @@ filesRouter.post('/nas', asyncHandler(async (request, response) => {
       request.ip || null,
     ],
   );
-  response.status(201).json({ file: mapFile(result.rows[0]) });
+  response.status(201).json({ file: await mapFile(result.rows[0]) });
 }));
 
 filesRouter.get('/:fileId/content', asyncHandler(async (request, response, next) => {
@@ -429,8 +463,8 @@ filesRouter.get('/:fileId/content', asyncHandler(async (request, response, next)
     [fileId],
   );
   const file = result.rows[0];
-  if (!file || !file.storageKey) {
-    response.status(404).json({ error: '文件不存在或不是服务器托管文件。' });
+  if (!file || (!file.storageKey && !file.nasPath)) {
+    response.status(404).json({ error: '文件不存在。' });
     return;
   }
   const access = await getProjectAccess(
@@ -444,8 +478,16 @@ filesRouter.get('/:fileId/content', asyncHandler(async (request, response, next)
   }
 
   await recordAuditLog(pool, request, { action: AUDIT_EVENTS.FILE_DOWNLOAD, projectId: file.projectId, entityType: 'file', entityId: file.id, details: { name: file.name, disposition: request.query.download === '1' ? 'attachment' : 'inline' } });
-  const absolutePath = resolveWithinStorage(file.storageKey);
-  await stat(absolutePath);
+  const absolutePath = file.storageKey ? resolveWithinStorage(file.storageKey) : file.nasPath!;
+  if (!file.storageKey && !isNasPathWhitelisted(absolutePath)) {
+    response.status(404).json({ error: 'NAS 文件仅作为路径引用，服务器不可安全在线播放。' });
+    return;
+  }
+  const fileStat = await stat(absolutePath);
+  if (!fileStat.isFile()) {
+    response.status(404).json({ error: 'NAS 文件仅作为路径引用，服务器不可安全在线播放。' });
+    return;
+  }
   const disposition = request.query.download === '1' ? 'attachment' : 'inline';
   response.setHeader(
     'Content-Disposition',
@@ -485,7 +527,7 @@ filesRouter.post('/:fileId/restore', asyncHandler(async (request, response) => {
     await client.query('UPDATE project_files SET deleted_at = NULL WHERE id = $1', [file.id]);
     await recordAuditLog(client, request, { action: AUDIT_EVENTS.FILE_RESTORE, projectId: file.projectId, entityType: 'file', entityId: file.id, details: { name: file.name } });
     await client.query('COMMIT');
-    response.json({ file: mapFile(file) });
+    response.json({ file: await mapFile(file) });
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

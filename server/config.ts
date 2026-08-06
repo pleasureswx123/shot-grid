@@ -12,6 +12,11 @@ const readInteger = (name: string, fallback: number, minimum = 1): number => {
   return value;
 };
 
+const readList = (name: string): string[] => (process.env[name] || '')
+  .split(';')
+  .map(item => item.trim())
+  .filter(Boolean);
+
 const readBoolean = (name: string, fallback: boolean): boolean => {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -38,6 +43,7 @@ export const config = {
   virusScanCommand: process.env.VIRUS_SCAN_COMMAND || '',
   storageRoot: path.resolve(process.env.STORAGE_ROOT || path.join(process.cwd(), 'storage')),
   maxUploadBytes: readInteger('MAX_UPLOAD_MB', 2048) * 1024 * 1024,
+  nasRootWhitelist: readList('NAS_ROOT_WHITELIST'),
 };
 
 export const requireDatabaseUrl = (): string => {

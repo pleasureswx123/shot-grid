@@ -8,7 +8,7 @@ interface VersionUploadModalProps {
 }
 
 export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialTaskId, onClose }) => {
-  const { tasks, currentUser, addVersion, uploadVersionFile } = useApp();
+  const { tasks, currentUser, addVersion, uploadVersionFile, files } = useApp();
 
   const activeTask = tasks.find(t => t.id === initialTaskId) || tasks[0];
   
@@ -24,6 +24,7 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
   const [thumbnailUrl, setThumbnailUrl] = useState<string>('');
   const [changelog, setChangelog] = useState<string>('');
   const [isExternalVersionEnabled, setIsExternalVersionEnabled] = useState(false);
+  const [selectedRegisteredFileId, setSelectedRegisteredFileId] = useState('');
 
   // AI Parameters
   const [modelName, setModelName] = useState<string>('Kling 1.5 Pro');
@@ -38,6 +39,9 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
 
   const isDemoMode = (import.meta as unknown as { env?: { VITE_DEMO_MODE?: string } }).env?.VITE_DEMO_MODE === 'true';
   const canUseExternalVersion = currentUser.role === 'admin';
+
+  const registeredReviewFiles = files.filter(file => file.fileType === 'review');
+  const selectedRegisteredFile = registeredReviewFiles.find(file => file.id === selectedRegisteredFileId);
 
   const sampleVideos = [
     { name: 'ForBiggerBlazes (科幻警报火焰)', url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4', thumb: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80' },
@@ -54,8 +58,8 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
     try {
       const useExternalVersion = canUseExternalVersion && isExternalVersionEnabled;
 
-      if (!selectedFile && !useExternalVersion) {
-        throw new Error('请选择本地视频或图片并上传到服务器托管存储，或由管理员显式启用外链版本。');
+      if (!selectedFile && !selectedRegisteredFile && !useExternalVersion) {
+        throw new Error('请选择本地视频或图片、已登记审核文件，或由管理员显式启用外链版本。');
       }
 
       if (useExternalVersion && !fileUrl.trim()) {
@@ -70,14 +74,14 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
         throw new Error('文件上传成功后未返回托管文件信息，请重试。');
       }
 
-      const versionFileUrl = uploadedFile?.contentUrl || (useExternalVersion ? fileUrl.trim() : '');
+      const versionFileUrl = uploadedFile?.contentUrl || selectedRegisteredFile?.contentUrl || (selectedRegisteredFile ? `/api/files/${selectedRegisteredFile.id}/content` : '') || (useExternalVersion ? fileUrl.trim() : '');
 
       await addVersion({
         taskId: selectedTask.id,
         entityType: selectedTask.entityType,
         entityId: selectedTask.entityId,
         versionNumber,
-        fileId: uploadedFile?.id,
+        fileId: uploadedFile?.id || selectedRegisteredFile?.id,
         fileUrl: versionFileUrl,
         fileType,
         thumbnailUrl: thumbnailUrl.trim(),
@@ -90,7 +94,8 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
           seed: seed.trim(),
           cameraMotion,
           generationCost,
-          nasPath: nasPath.trim(),
+          nasPath: selectedRegisteredFile?.nasPath || nasPath.trim(),
+          nasPlaybackUnsupported: selectedRegisteredFile?.storageKind === 'nas' && !selectedRegisteredFile.nasStreamable,
           resolution: '3840x2160',
           aspectRatio: '2.39:1'
         }
@@ -197,6 +202,31 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
               />
             </label>
           </div>
+
+
+          {registeredReviewFiles.length > 0 && (
+            <div className="space-y-1 rounded-lg border border-slate-800 bg-slate-800/40 p-3">
+              <label className="text-slate-400 font-semibold">或选择已登记审核文件</label>
+              <select
+                value={selectedRegisteredFileId}
+                onChange={event => {
+                  setSelectedRegisteredFileId(event.target.value);
+                  if (event.target.value) setSelectedFile(null);
+                }}
+                className="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-xs text-slate-200"
+              >
+                <option value="">不使用已登记文件</option>
+                {registeredReviewFiles.map(file => (
+                  <option key={file.id} value={file.id}>
+                    {file.name} · {file.storageKind === 'nas' ? (file.nasStreamable ? 'NAS 可在线播放' : '路径引用，不支持在线播放') : '服务器托管'}
+                  </option>
+                ))}
+              </select>
+              {selectedRegisteredFile?.storageKind === 'nas' && !selectedRegisteredFile.nasStreamable && (
+                <p className="text-[11px] text-amber-300">路径引用，不支持在线播放；审核页会保留路径引用并提示无法预览。</p>
+              )}
+            </div>
+          )}
 
           {canUseExternalVersion && (
             <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-800/40 p-3">
