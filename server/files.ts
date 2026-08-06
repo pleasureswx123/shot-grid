@@ -121,6 +121,7 @@ interface FileRow {
   entityId: string | null;
   entityCode: string | null;
   versionNumber: string | null;
+  versionId: string | null;
   uploadedAt: string;
   uploaderId: string | null;
   uploaderName: string | null;
@@ -195,6 +196,7 @@ const selectFileColumns = `
          f.mime_type AS "mimeType", f.sha256,
          f.entity_type AS "entityType", f.entity_id AS "entityId",
          f.entity_code AS "entityCode", f.version_number AS "versionNumber",
+         f.version_id AS "versionId",
          f.uploaded_at AS "uploadedAt", f.uploader_id AS "uploaderId",
          u.name AS "uploaderName"
     FROM project_files f
@@ -253,6 +255,9 @@ filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, res
     const versionNumber = typeof request.body.versionNumber === 'string'
       ? request.body.versionNumber.trim().slice(0, 60)
       : null;
+    const taskId = typeof request.body.taskId === 'string' ? request.body.taskId : null;
+    const requestedVersionId = typeof request.body.versionId === 'string' && request.body.versionId
+      ? request.body.versionId : null;
 
     if (!UUID_PATTERN.test(projectId) || !FILE_TYPES.has(fileType)) {
       response.status(400).json({ error: '项目或文件用途无效。' });
@@ -260,6 +265,18 @@ filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, res
     }
     if (entityType && !ENTITY_TYPES.has(entityType)) {
       response.status(400).json({ error: '关联类型必须是镜头或资产。' });
+      return;
+    }
+    if (fileType === 'review' && (!taskId || !UUID_PATTERN.test(taskId))) {
+      response.status(400).json({ error: '审核文件必须绑定有效的制作任务和版本。' });
+      return;
+    }
+    if (fileType === 'source' && (!entityType || !entityId || !UUID_PATTERN.test(entityId))) {
+      response.status(400).json({ error: '源文件必须绑定镜头或资产。' });
+      return;
+    }
+    if (requestedVersionId && !UUID_PATTERN.test(requestedVersionId)) {
+      response.status(400).json({ error: '版本 ID 无效。' });
       return;
     }
 
@@ -276,8 +293,19 @@ filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, res
       response.status(403).json({ error: '客户成员不能上传或登记项目文件。' });
       return;
     }
+    if (entityType && entityId) {
+      const entity = await pool.query(
+        `SELECT 1 FROM ${entityType === 'shot' ? 'shots' : 'assets'} WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL`,
+        [entityId, projectId],
+      );
+      if (!entity.rowCount) {
+        response.status(400).json({ error: '文件归属对象不存在或不属于当前项目。' });
+        return;
+      }
+    }
 
     const fileId = randomUUID();
+    const versionId = fileType === 'review' ? randomUUID() : requestedVersionId;
     const extension = path.extname(request.file.originalname).slice(1).toLowerCase();
     const mimeError = validateMimeForExtension(extension, request.file.mimetype);
     if (mimeError) {
@@ -298,14 +326,39 @@ filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, res
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      let versionEntityType: 'project' | 'shot' | 'asset' | null = null;
+      let versionEntityId: string | null = null;
+      if (fileType === 'review' && versionId) {
+        const task = await client.query<{ entity_type: 'project' | 'shot' | 'asset'; entity_id: string }>(
+          'SELECT entity_type, entity_id::text FROM tasks WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL FOR UPDATE',
+          [taskId, projectId],
+        );
+        if (!task.rowCount) {
+          await client.query('ROLLBACK');
+          response.status(400).json({ error: '任务不存在或不属于当前项目。' });
+          return;
+        }
+        versionEntityType = task.rows[0].entity_type;
+        versionEntityId = task.rows[0].entity_id;
+        if (versionEntityType !== 'project' && (entityType !== versionEntityType || entityId !== versionEntityId)) {
+          await client.query('ROLLBACK');
+          response.status(400).json({ error: '文件归属与任务归属不一致。' });
+          return;
+        }
+        await client.query(
+          `INSERT INTO versions (id,task_id,entity_type,entity_id,version_number,file_url,file_type,thumbnail_url,uploader_id,changelog,ai_params)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)`,
+          [versionId, taskId, versionEntityType, versionEntityId, versionNumber || 'V001', `/api/files/${fileId}/content`, request.body.versionFileType === 'image' ? 'image' : 'video', String(request.body.thumbnailUrl || ''), request.authUser!.id, String(request.body.changelog || ''), String(request.body.aiParams || 'null')],
+        );
+      }
       const result = await client.query<FileRow>(
         `WITH inserted AS (
           INSERT INTO project_files (
             id, project_id, name, file_type, extension, size_bytes,
             storage_key, mime_type, sha256, entity_type, entity_id,
-            entity_code, version_number, uploader_id
+            entity_code, version_number, version_id, uploader_id
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
           )
           RETURNING *
         )
@@ -316,6 +369,7 @@ filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, res
                i.mime_type AS "mimeType", i.sha256,
                i.entity_type AS "entityType", i.entity_id AS "entityId",
                i.entity_code AS "entityCode", i.version_number AS "versionNumber",
+               i.version_id AS "versionId",
                i.uploaded_at AS "uploadedAt", i.uploader_id AS "uploaderId",
                u.name AS "uploaderName"
           FROM inserted i
@@ -334,9 +388,16 @@ filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, res
           entityId || null,
           entityCode || null,
           versionNumber || null,
+          versionId,
           request.authUser!.id,
         ],
       );
+      if (fileType === 'review' && versionId) {
+        await client.query('UPDATE tasks SET latest_version_id=$1,status=$2 WHERE id=$3', [versionId, '待审核', taskId]);
+        if (versionEntityType !== 'project') {
+          await client.query(`UPDATE ${versionEntityType === 'shot' ? 'shots' : 'assets'} SET latest_version_id=$1 WHERE id=$2`, [versionId, versionEntityId]);
+        }
+      }
       await recordAuditLog(client, request, {
         action: AUDIT_EVENTS.FILE_UPLOAD,
         projectId,
@@ -368,6 +429,7 @@ filesRouter.post('/nas', asyncHandler(async (request, response) => {
   const entityType = typeof request.body?.entityType === 'string' && request.body.entityType
     ? request.body.entityType
     : null;
+  const entityId = typeof request.body?.entityId === 'string' ? request.body.entityId.trim() : null;
   const entityCode = typeof request.body?.entityCode === 'string'
     ? request.body.entityCode.trim().slice(0, 100)
     : null;
@@ -385,6 +447,14 @@ filesRouter.post('/nas', asyncHandler(async (request, response) => {
     (entityType && !ENTITY_TYPES.has(entityType))
   ) {
     response.status(400).json({ error: '共享文件信息无效。' });
+    return;
+  }
+  if (fileType === 'review') {
+    response.status(400).json({ error: '审核文件必须通过上传接口与版本在同一事务中创建。' });
+    return;
+  }
+  if (!entityType || !entityId || !UUID_PATTERN.test(entityId)) {
+    response.status(400).json({ error: '源文件必须绑定镜头或资产。' });
     return;
   }
   if (!nasPath.startsWith('\\\\') && !/^[A-Za-z]:\\/.test(nasPath) && !path.isAbsolute(nasPath)) {
@@ -405,6 +475,14 @@ filesRouter.post('/nas', asyncHandler(async (request, response) => {
     response.status(403).json({ error: '客户成员不能上传或登记项目文件。' });
     return;
   }
+  const entity = await pool.query(
+    `SELECT 1 FROM ${entityType === 'shot' ? 'shots' : 'assets'} WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL`,
+    [entityId, projectId],
+  );
+  if (!entity.rowCount) {
+    response.status(400).json({ error: '文件归属对象不存在或不属于当前项目。' });
+    return;
+  }
 
   const fileId = randomUUID();
   const extension = path.extname(name).slice(1).toLowerCase().slice(0, 20);
@@ -412,8 +490,8 @@ filesRouter.post('/nas', asyncHandler(async (request, response) => {
     `WITH inserted AS (
       INSERT INTO project_files (
         id, project_id, name, file_type, extension, nas_path,
-        entity_type, entity_code, version_number, uploader_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        entity_type, entity_id, entity_code, version_number, uploader_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
     )
     SELECT i.id, i.project_id AS "projectId", i.name,
@@ -423,6 +501,7 @@ filesRouter.post('/nas', asyncHandler(async (request, response) => {
            i.mime_type AS "mimeType", i.sha256,
            i.entity_type AS "entityType", i.entity_id AS "entityId",
            i.entity_code AS "entityCode", i.version_number AS "versionNumber",
+           i.version_id AS "versionId",
            i.uploaded_at AS "uploadedAt", i.uploader_id AS "uploaderId",
            u.name AS "uploaderName"
       FROM inserted i
@@ -435,6 +514,7 @@ filesRouter.post('/nas', asyncHandler(async (request, response) => {
       extension,
       nasPath,
       entityType,
+      entityId,
       entityCode || null,
       versionNumber || null,
       request.authUser!.id,

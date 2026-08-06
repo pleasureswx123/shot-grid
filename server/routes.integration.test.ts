@@ -309,9 +309,12 @@ maybeDescribe('server API integration routes', () => {
     const tooLarge = await request('POST', '/api/files/upload', ids.creator, bigForm);
     assert.equal(tooLarge.response.status, 413);
 
+    const owner = await request('POST', '/api/assets', ids.creator, { projectId: ids.project, name: '源文件资产', category: '道具' });
     const okForm = new FormData();
     okForm.set('projectId', ids.project);
-    okForm.set('fileType', 'review');
+    okForm.set('fileType', 'source');
+    okForm.set('entityType', 'asset');
+    okForm.set('entityId', owner.data.asset.id);
     okForm.set('file', new Blob(['owned by creator'], { type: 'text/plain' }), 'owned.txt');
     const uploaded = await request('POST', '/api/files/upload', ids.creator, okForm);
     assert.equal(uploaded.response.status, 201);
@@ -319,5 +322,39 @@ maybeDescribe('server API integration routes', () => {
 
     const deleteByClient = await request('DELETE', `/api/files/${creatorFileId}`, ids.client);
     assert.equal(deleteByClient.response.status, 403);
+  });
+
+  test('atomically owns review files by UUID and rejects missing or cross-project ownership', async () => {
+    const unowned = new FormData();
+    unowned.set('projectId', ids.project);
+    unowned.set('fileType', 'review');
+    unowned.set('file', new Blob(['review'], { type: 'text/plain' }), 'review.txt');
+    assert.equal((await request('POST', '/api/files/upload', ids.creator, unowned)).response.status, 400);
+
+    const foreignAsset = await request('POST', '/api/assets', ids.outsider, { projectId: ids.secondProject, name: '外部资产', category: '道具' });
+    const crossed = new FormData();
+    crossed.set('projectId', ids.project);
+    crossed.set('fileType', 'source');
+    crossed.set('entityType', 'asset');
+    crossed.set('entityId', foreignAsset.data.asset.id);
+    crossed.set('file', new Blob(['source'], { type: 'text/plain' }), 'source.txt');
+    assert.equal((await request('POST', '/api/files/upload', ids.creator, crossed)).response.status, 400);
+
+    const asset = await request('POST', '/api/assets', ids.creator, { projectId: ids.project, name: '审核归属资产', category: '道具' });
+    const task = await request('POST', '/api/tasks', ids.creator, { projectId: ids.project, entityType: 'asset', entityId: asset.data.asset.id, title: '审核归属任务', pipelineStage: '概念设计' });
+    const review = new FormData();
+    review.set('projectId', ids.project);
+    review.set('fileType', 'review');
+    review.set('taskId', task.data.task.id);
+    review.set('entityType', 'asset');
+    review.set('entityId', asset.data.asset.id);
+    review.set('versionNumber', 'V007');
+    review.set('versionFileType', 'image');
+    review.set('file', new Blob(['review'], { type: 'text/plain' }), 'review.txt');
+    const created = await request('POST', '/api/files/upload', ids.creator, review);
+    assert.equal(created.response.status, 201);
+    const linked = await pool.query('SELECT f.version_id,v.version_number FROM project_files f JOIN versions v ON v.id=f.version_id WHERE f.id=$1', [created.data.file.id]);
+    assert.equal(linked.rows[0].version_number, 'V007');
+    assert.ok(linked.rows[0].version_id);
   });
 });
