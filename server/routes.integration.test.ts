@@ -29,6 +29,7 @@ maybeDescribe('server API integration routes', () => {
 
   const ids = {
     admin: randomUUID(),
+    director: randomUUID(),
     creator: randomUUID(),
     client: randomUUID(),
     outsider: randomUUID(),
@@ -100,11 +101,12 @@ maybeDescribe('server API integration routes', () => {
     try {
       await pool.query('TRUNCATE audit_logs, chat_message_likes, chat_messages, channel_members, department_channels, review_list_participants, review_list_versions, review_lists, notes, versions, project_files, tasks, shot_assets, shots, assets, scenes, project_members, projects, sessions, users RESTART IDENTITY CASCADE');
       await insertUser(ids.admin, 'admin', 'api-admin@example.test');
+      await insertUser(ids.director, 'director', 'api-director@example.test');
       await insertUser(ids.creator, 'creator', 'api-creator@example.test');
       await insertUser(ids.client, 'client', 'api-client@example.test');
       await insertUser(ids.outsider, 'creator', 'api-outsider@example.test');
       await pool.query(`INSERT INTO projects (id, name, code, project_type, director_id, storage_key) VALUES ($1, '集成测试项目', $2, '短片', $3, $2), ($4, '隔离项目', $5, '短片', $6, $5)`, [ids.project, `APITEST_${Date.now()}`, ids.admin, ids.secondProject, `OTHER_${Date.now()}`, ids.admin]);
-      await pool.query(`INSERT INTO project_members (project_id, user_id, project_role) VALUES ($1,$2,'admin'),($1,$3,'creator'),($1,$4,'client'),($5,$6,'creator')`, [ids.project, ids.admin, ids.creator, ids.client, ids.secondProject, ids.outsider]);
+      await pool.query(`INSERT INTO project_members (project_id, user_id, project_role) VALUES ($1,$2,'admin'),($1,$3,'director'),($1,$4,'creator'),($1,$5,'client'),($6,$7,'creator')`, [ids.project, ids.admin, ids.director, ids.creator, ids.client, ids.secondProject, ids.outsider]);
       await pool.query('COMMIT');
     } catch (error) {
       await pool.query('ROLLBACK');
@@ -124,6 +126,37 @@ maybeDescribe('server API integration routes', () => {
 
     const clientCreate = await request('POST', '/api/shots', ids.client, { projectId: ids.project, sceneCode: 'SC01', shotCode: 'CLIENT_DENIED' });
     assert.equal(clientCreate.response.status, 403);
+  });
+
+  test('redacts AI generation secrets from the same version for clients only', async () => {
+    const asset = await request('POST', '/api/assets', ids.creator, { projectId: ids.project, name: '权限版本资产', category: '道具' });
+    const task = await request('POST', '/api/tasks', ids.creator, { projectId: ids.project, entityType: 'asset', entityId: asset.data.asset.id, title: '权限测试任务', pipelineStage: '概念设计' });
+    const aiParams = {
+      prompt: 'internal prompt',
+      generationCost: 42,
+      seed: 9876,
+      nasPath: '\\\\NAS\\project\\source.exr',
+      sourceFilePath: '/mnt/nas/project/source.exr',
+    };
+    const created = await request('POST', '/api/versions', ids.creator, { taskId: task.data.task.id, fileUrl: 'https://example.test/review.png', fileType: 'image', aiParams });
+    assert.equal(created.response.status, 201);
+
+    for (const userId of [ids.creator, ids.director, ids.admin]) {
+      const detail = await request('GET', `/api/versions/${created.data.version.id}`, userId);
+      assert.equal(detail.response.status, 200);
+      assert.deepEqual(detail.data.version.aiParams, aiParams);
+    }
+
+    const clientDetail = await request('GET', `/api/versions/${created.data.version.id}`, ids.client);
+    assert.equal(clientDetail.response.status, 200);
+    assert.equal('aiParams' in clientDetail.data.version, false);
+    for (const secret of ['prompt', 'generationCost', 'seed', 'nasPath', 'sourceFilePath']) {
+      assert.equal(JSON.stringify(clientDetail.data).includes(secret), false);
+    }
+
+    const clientList = await request('GET', `/api/versions?projectId=${ids.project}`, ids.client);
+    assert.equal(clientList.response.status, 200);
+    assert.equal('aiParams' in clientList.data.versions[0], false);
   });
 
   test('covers shot CRUD and duplicate shotCode failure', async () => {

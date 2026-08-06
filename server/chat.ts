@@ -3,6 +3,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { pool } from './db';
 import { asyncHandler, readNumber, readString, requireProjectAccess, requireProjectAccessFromRequest, UUID_PATTERN } from './apiUtils';
+import { canCreateTask, getProjectPermissionContext } from './permissions';
 
 const DEFAULT_MESSAGE_LIMIT = 50;
 const MAX_MESSAGE_LIMIT = 100;
@@ -49,6 +50,12 @@ const getAccessibleChannel = async (channelId: string, request: Request, respons
     return null;
   }
 
+  const context = await getProjectPermissionContext(channel.projectId, request.authUser!.id, request.authUser!.role);
+  if (channel.isPrivate && context.projectRole === 'client') {
+    sendChannelAccessDenied(response);
+    return null;
+  }
+
   if (channel.isPrivate && request.authUser!.role !== 'admin') {
     const memberResult = await pool.query(
       'SELECT 1 FROM channel_members WHERE channel_id = $1 AND user_id = $2',
@@ -66,6 +73,7 @@ const getAccessibleChannel = async (channelId: string, request: Request, respons
 chatRouter.get('/channels', asyncHandler(async (request, response) => {
   const projectId = await requireProjectAccessFromRequest(request, response);
   if (!projectId) return;
+  const context = await getProjectPermissionContext(projectId, request.authUser!.id, request.authUser!.role);
 
   const result = await pool.query(
     `SELECT c.id, c.name, c.department, c.description, c.icon,
@@ -77,15 +85,15 @@ chatRouter.get('/channels', asyncHandler(async (request, response) => {
       WHERE c.project_id = $1
         AND (
           c.is_private = false
-          OR $3 = 'admin'
+          OR ($3 = 'admin' AND $4::boolean = false)
           OR EXISTS (
             SELECT 1 FROM channel_members self
-             WHERE self.channel_id = c.id AND self.user_id = $2
+             WHERE self.channel_id = c.id AND self.user_id = $2 AND $4::boolean = false
           )
         )
       GROUP BY c.id
       ORDER BY c.created_at ASC`,
-    [projectId, request.authUser!.id, request.authUser!.role],
+    [projectId, request.authUser!.id, request.authUser!.role, context.projectRole === 'client'],
   );
   response.json({ channels: result.rows });
 }));
@@ -93,6 +101,11 @@ chatRouter.get('/channels', asyncHandler(async (request, response) => {
 chatRouter.post('/channels', asyncHandler(async (request, response) => {
   const projectId = await requireProjectAccessFromRequest(request, response);
   if (!projectId) return;
+  const context = await getProjectPermissionContext(projectId, request.authUser!.id, request.authUser!.role);
+  if (!canCreateTask(context)) {
+    response.status(403).json({ error: '客户账号不能创建内部频道。' });
+    return;
+  }
 
   const id = randomUUID();
   const name = readString(request.body?.name, '项目群聊');
