@@ -6,13 +6,14 @@ import {
 } from 'lucide-react';
 import { TaskPipelineStage } from '../../types';
 import { TaskDetailCard } from '../tasks/TaskDetailCard';
+import { getMyDueTasks, getPendingReviewTasks, getRecentProjectVersions } from './workbenchMetrics';
 
 interface WorkbenchViewProps {
   onOpenNewVersion: (taskId?: string) => void;
 }
 
 export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }) => {
-  const { currentUser, tasks, shots, assets, versions, updateTaskStatus, setSelectedShotId, setActiveTab } = useApp();
+  const { currentUser, tasks, shots, versions, reviewLists, setSelectedShotId, setActiveTab } = useApp();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [stageFilter, setStageFilter] = useState<TaskPipelineStage | '全部'>('全部');
   const canViewInternal = currentUser.role !== 'client';
@@ -23,14 +24,17 @@ export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }
   const myRevisingTasks = internalTasks.filter(t => t.assigneeId === currentUser.id && t.status === '修改中');
   const myBlockedTasks = internalTasks.filter(t => t.assigneeId === currentUser.id && t.status === '已阻塞');
   
-  // Pending review for directors/admins or tasks in 待审核
-  const pendingReviewTasks = internalTasks.filter(t => t.status === '待审核');
+  // “待我审核”只来自当前用户尚未完成参与的开放审核单。
+  const pendingReviewTasks = getPendingReviewTasks(tasks, versions, reviewLists, currentUser);
   
   // All my active tasks
   const myAllTasks = internalTasks.filter(t => t.assigneeId === currentUser.id && (stageFilter === '全部' || t.pipelineStage === stageFilter));
 
-  // Recent versions
-  const recentVersions = versions.slice(0, 5);
+  const { dueToday, overdue } = getMyDueTasks(internalTasks, currentUser.id);
+
+  // 项目口径：最近 24 小时内的全部项目提交，按提交时间倒序。
+  const recentProjectVersions = getRecentProjectVersions(versions);
+  const recentVersionsForDisplay = recentProjectVersions.slice(0, 5);
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -107,9 +111,9 @@ export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }
             <Clock className="w-4 h-4 text-rose-400" />
           </div>
           <div className="text-2xl font-extrabold text-white">
-            {myAllTasks.filter(t => t.dueDate <= '2026-07-28' && t.status !== '已完成').length}
+            {dueToday.length}
           </div>
-          <div className="text-[10px] text-rose-400">优先排期提醒</div>
+          <div className="text-[10px] text-rose-400">另有逾期 {overdue.length} 项</div>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 space-y-1">
@@ -123,10 +127,10 @@ export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }
 
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 space-y-1">
           <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>近期版本提交</span>
+            <span>项目最近提交</span>
             <Sparkles className="w-4 h-4 text-emerald-400" />
           </div>
-          <div className="text-2xl font-extrabold text-white">{recentVersions.length}</div>
+          <div className="text-2xl font-extrabold text-white">{recentProjectVersions.length}</div>
           <div className="text-[10px] text-emerald-400">项目近24小时</div>
         </div>
       </div>
@@ -287,7 +291,7 @@ export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }
             </h2>
 
             <div className="space-y-3 text-xs">
-              {recentVersions.map(v => (
+              {recentVersionsForDisplay.map(v => (
                 <div key={v.id} className="border-l-2 border-indigo-500 pl-3 py-1 space-y-0.5">
                   <div className="flex items-center justify-between">
                     <span className="font-semibold text-slate-200">{v.entityId.toUpperCase()} {v.versionNumber}</span>
