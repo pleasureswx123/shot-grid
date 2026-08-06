@@ -33,7 +33,6 @@ export const ShotsView: React.FC<ShotsViewProps> = ({
   const [showBulkEdit, setShowBulkEdit] = useState(false);
   const [bulkSceneCode, setBulkSceneCode] = useState('');
   const [bulkAssigneeId, setBulkAssigneeId] = useState('');
-  const [bulkStatus, setBulkStatus] = useState('');
   
   // View mode: 'table' | 'card' | 'storyboard'
   const [viewMode, setViewMode] = useState<'table' | 'card' | 'storyboard'>('table');
@@ -145,10 +144,9 @@ export const ShotsView: React.FC<ShotsViewProps> = ({
   };
 
   const applyBulkEdit = () => {
-    const updates: Partial<Pick<Shot, 'sceneCode' | 'assigneeId' | 'status'>> = {};
+    const updates: Partial<Pick<Shot, 'sceneCode' | 'assigneeId'>> = {};
     if (bulkSceneCode.trim()) updates.sceneCode = bulkSceneCode.trim();
     if (bulkAssigneeId) updates.assigneeId = bulkAssigneeId;
-    if (bulkStatus) updates.status = bulkStatus as ShotStatus;
     if (!Object.keys(updates).length) return;
 
     updateShots(selectedShotIds, updates);
@@ -156,7 +154,6 @@ export const ShotsView: React.FC<ShotsViewProps> = ({
     setShowBulkEdit(false);
     setBulkSceneCode('');
     setBulkAssigneeId('');
-    setBulkStatus('');
   };
 
   return (
@@ -611,21 +608,6 @@ export const ShotsView: React.FC<ShotsViewProps> = ({
                 </select>
               </label>
 
-              <label className="text-xs text-slate-400">
-                镜头状态
-                <select
-                  value={bulkStatus}
-                  onChange={event => setBulkStatus(event.target.value)}
-                  className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-white outline-none focus:border-indigo-500"
-                >
-                  <option value="">不修改</option>
-                  <option value="未开始">未开始</option>
-                  <option value="制作中">制作中</option>
-                  <option value="审核中">审核中</option>
-                  <option value="已完成">已完成</option>
-                  <option value="已锁定">已锁定</option>
-                </select>
-              </label>
 
             </div>
 
@@ -638,7 +620,7 @@ export const ShotsView: React.FC<ShotsViewProps> = ({
               </button>
               <button
                 onClick={applyBulkEdit}
-                disabled={!bulkSceneCode.trim() && !bulkAssigneeId && !bulkStatus}
+                disabled={!bulkSceneCode.trim() && !bulkAssigneeId}
                 className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 应用到 {selectedShotIds.length} 个镜头

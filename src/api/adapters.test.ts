@@ -41,7 +41,7 @@ test('write adapters call server APIs instead of local browser storage', async (
     });
   }) as typeof fetch;
   try {
-    await shotsApi.updateShot('shot-1', { status: '制作中' });
+    await shotsApi.updateShot('shot-1', { assigneeId: 'user-1' });
     await assetsApi.createAsset({ projectId: 'project-1', name: '资产' });
     await tasksApi.updateTask('task-1', { status: '待审核' });
   } finally {
@@ -53,5 +53,5 @@ test('write adapters call server APIs instead of local browser storage', async (
     ['POST', '/api/assets'],
     ['PATCH', '/api/tasks/task-1'],
   ]);
-  assert.match(calls[0].body || '', /制作中/);
+  assert.match(calls[0].body || '', /user-1/);
 });
