@@ -8,7 +8,7 @@ interface TaskDetailCardProps {
 }
 
 export const TaskDetailCard: React.FC<TaskDetailCardProps> = ({ task }) => {
-  const { project, users, shots, assets, versions, notes, apiStatus, updateTaskAssignee } = useApp();
+  const { project, users, shots, assets, tasks, versions, notes, apiStatus, updateTaskAssignee } = useApp();
   const shot = task.entityType === 'shot' ? shots.find(item => item.id === task.entityId) : undefined;
   const asset = task.entityType === 'asset' ? assets.find(item => item.id === task.entityId) : undefined;
   const entityLabel = task.entityType === 'project'
@@ -23,6 +23,7 @@ export const TaskDetailCard: React.FC<TaskDetailCardProps> = ({ task }) => {
   const latestNotes = notes
     .filter(note => note.versionId === latestVersion?.id)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  const prerequisite = tasks.find(item => item.id === task.prerequisiteTaskId);
 
   return (
     <article className="rounded-xl border border-slate-700 bg-slate-900/70 p-4 space-y-3">
@@ -57,6 +58,7 @@ export const TaskDetailCard: React.FC<TaskDetailCardProps> = ({ task }) => {
         </div>
         <div><dt className="flex items-center gap-1 text-[10px] text-slate-500"><Calendar className="h-3 w-3" />截止日期</dt><dd className="mt-1 font-mono text-amber-300">{task.dueDate || '未设置'}</dd></div>
         <div><dt className="flex items-center gap-1 text-[10px] text-slate-500"><FileCheck2 className="h-3 w-3" />最新版本</dt><dd className="mt-1 font-mono text-indigo-300">{latestVersion?.versionNumber || '暂无版本'}</dd></div>
+        <div><dt className="text-[10px] text-slate-500">前置任务</dt><dd className="mt-1 text-slate-300">{prerequisite ? `${prerequisite.pipelineStage} · ${prerequisite.status}` : '无'}</dd></div>
       </dl>
 
       <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2.5">

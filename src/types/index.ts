@@ -17,7 +17,7 @@ export type AssetCategory = '角色' | '场景' | '道具' | '服装' | '载具'
 
 export type AssetStatus = '未开始' | '制作中' | '审核中' | '已定稿' | '已锁定';
 
-export type ShotPipelineStage = '视频生成';
+export type ShotPipelineStage = '台本' | '视觉准备' | '视频生成' | '剪辑' | '声音' | '成片';
 export type ProjectPipelineStage = '声音' | '成片';
 export type AssetPipelineStage = '需求' | '概念设计' | '修改' | '定稿';
 export type TaskPipelineStage =

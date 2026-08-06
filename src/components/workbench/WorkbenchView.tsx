@@ -4,7 +4,7 @@ import {
   Clock, AlertTriangle, CheckCircle2, PlayCircle, Lock,
   PlusCircle, Sparkles, ChevronRight, User, Calendar
 } from 'lucide-react';
-import { Task, Version } from '../../types';
+import { TaskPipelineStage } from '../../types';
 import { TaskDetailCard } from '../tasks/TaskDetailCard';
 
 interface WorkbenchViewProps {
@@ -14,6 +14,7 @@ interface WorkbenchViewProps {
 export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }) => {
   const { currentUser, tasks, shots, assets, versions, updateTaskStatus, setSelectedShotId, setActiveTab } = useApp();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [stageFilter, setStageFilter] = useState<TaskPipelineStage | '全部'>('全部');
 
   // Filter tasks based on current user
   const myMakingTasks = tasks.filter(t => t.assigneeId === currentUser.id && t.status === '制作中');
@@ -24,7 +25,7 @@ export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }
   const pendingReviewTasks = tasks.filter(t => t.status === '待审核');
   
   // All my active tasks
-  const myAllTasks = tasks.filter(t => t.assigneeId === currentUser.id);
+  const myAllTasks = tasks.filter(t => t.assigneeId === currentUser.id && (stageFilter === '全部' || t.pipelineStage === stageFilter));
 
   // Recent versions
   const recentVersions = versions.slice(0, 5);
@@ -137,7 +138,12 @@ export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }
               <PlayCircle className="w-4 h-4 text-indigo-400" />
               <span>我的制作任务清单 ({myAllTasks.length})</span>
             </h2>
-            <span className="text-xs text-slate-400">双击或点击任务即可上传审核版本</span>
+            <div className="flex items-center gap-2">
+              <label htmlFor="task-stage-filter" className="text-xs text-slate-400">阶段</label>
+              <select id="task-stage-filter" value={stageFilter} onChange={event => setStageFilter(event.target.value as TaskPipelineStage | '全部')} className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200">
+                {['全部', '台本', '视觉准备', '视频生成', '剪辑', '声音', '成片', '需求', '概念设计', '修改', '定稿'].map(stage => <option key={stage}>{stage}</option>)}
+              </select>
+            </div>
           </div>
 
           {myAllTasks.length === 0 ? (

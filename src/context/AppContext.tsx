@@ -224,7 +224,7 @@ export const normalizeScenesAndTasks = (
       ...shot,
       sceneCode,
       sceneId: scene.id,
-      currentStage: '视频生成' as const,
+      currentStage: shot.currentStage || '台本',
     };
   });
 
@@ -254,50 +254,31 @@ export const normalizeScenesAndTasks = (
     }
 
     state.tasks
-      .filter(task =>
-        task.pipelineStage === stage &&
-        (
-          task.entityType === 'shot' ||
-          (task.entityType === 'project' && task.entityId === project.id)
-        )
-      )
+      .filter(task => task.pipelineStage === stage && task.entityType === 'project' && task.entityId === project.id)
       .forEach(task => finishingTaskIdMap.set(task.id, canonicalTask?.id || defaultTask.id));
   }
 
   const shotTaskIdMap = new Map<string, { taskId: string; shotId: string }>();
-  const shotTasks: Task[] = shots.map(shot => {
+  const shotTasks: Task[] = shots.flatMap(shot => {
     const legacyTasks = state.tasks.filter(task =>
       task.entityType === 'shot' &&
-      task.entityId === shot.id &&
-      !PROJECT_FINISHING_STAGES.includes(
-        task.pipelineStage as typeof PROJECT_FINISHING_STAGES[number],
-      )
+      task.entityId === shot.id
     );
-    const existingVideoTask = legacyTasks.find(task => task.pipelineStage === '视频生成');
-    const bestLegacyTask = existingVideoTask ||
-      legacyTasks.find(task => task.status !== '未开始') ||
-      legacyTasks[0];
-    const defaultTask = createShotPipelineTasks(
+    const defaults = createShotPipelineTasks(
       shot.id,
       shot.sceneCode,
       shot.shotCode,
       shot.assigneeId,
-    )[0];
-    const canonicalTask: Task = bestLegacyTask
-      ? {
-          ...defaultTask,
-          ...bestLegacyTask,
-          entityType: 'shot',
-          entityId: shot.id,
-          pipelineStage: '视频生成',
-          title: `${shot.sceneCode} / ${shot.shotCode} - 视频生成`,
-        }
-      : defaultTask;
-
-    legacyTasks.forEach(task => {
-      shotTaskIdMap.set(task.id, { taskId: canonicalTask.id, shotId: shot.id });
+    );
+    const canonicalTasks = defaults.map(defaultTask => {
+      const existing = legacyTasks.find(task => task.pipelineStage === defaultTask.pipelineStage);
+      return existing ? { ...defaultTask, ...existing, entityType: 'shot' as const, entityId: shot.id, title: defaultTask.title } : defaultTask;
     });
-    return canonicalTask;
+    legacyTasks.forEach(task => {
+      const canonical = canonicalTasks.find(item => item.pipelineStage === task.pipelineStage) || canonicalTasks[0];
+      shotTaskIdMap.set(task.id, { taskId: canonical.id, shotId: shot.id });
+    });
+    return canonicalTasks;
   });
   const shotTaskByShotId = new Map(
     shotTasks.map(task => [task.entityId, task] as const),
@@ -435,7 +416,7 @@ export const createShotPipelineTasks = (
   shotCode: string,
   assigneeId: string,
 ): Task[] => {
-  const pipelineStages = ['视频生成'] as const;
+  const pipelineStages = ['台本', '视觉准备', '视频生成', '剪辑', '声音', '成片'] as const;
 
   return pipelineStages.map((stage, index) => ({
     id: `t_${shotId}_${index}`,
@@ -444,10 +425,11 @@ export const createShotPipelineTasks = (
     entityId: shotId,
     pipelineStage: stage,
     assigneeId,
-    status: '制作中',
+    status: index === 0 ? '制作中' : '已阻塞',
     priority: '中',
     dueDate: new Date(Date.now() + (index + 1) * 86400000 * 2).toISOString().split('T')[0],
     requirements: `${sceneCode} / ${shotCode} 的${stage}阶段制作要求`,
+    prerequisiteTaskId: index > 0 ? `t_${shotId}_${index - 1}` : undefined,
     createdAt: new Date().toISOString(),
   }));
 };
@@ -465,7 +447,7 @@ export const createAssetPipelineTasks = (
     entityId: assetId,
     pipelineStage: stage,
     assigneeId,
-    status: index === 0 ? '已完成' : (index === 1 ? '制作中' : '未开始'),
+    status: index === 0 ? '制作中' : '已阻塞',
     priority: '中',
     dueDate: new Date(Date.now() + (index + 1) * 86400000 * 2)
       .toISOString()
@@ -790,7 +772,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
 
     setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
     try {
-      await Promise.all(uniqueAssets.map(asset => assetsApi.createAsset({ ...asset, projectId: project.id })));
+      await assetsApi.bulkCreateAssets({ projectId: project.id, assets: uniqueAssets });
       await refreshProjectData();
       return { createdCount: uniqueAssets.length, skippedCount };
     } catch (error) {
