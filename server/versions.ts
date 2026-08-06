@@ -10,7 +10,7 @@ import { applyVersionStatusEffects, assertVersionStatusTransition, isEntityLocke
 
 export const versionsRouter = Router();
 
-export const versionSelect = `SELECT id, task_id AS "taskId", entity_type AS "entityType", entity_id AS "entityId", version_number AS "versionNumber", file_id AS "fileId", file_url AS "fileUrl", file_type AS "fileType", thumbnail_url AS "thumbnailUrl", uploader_id AS "uploaderId", created_at AS "createdAt", changelog, status, ai_params AS "aiParams" FROM versions`;
+export const versionSelect = `SELECT id, task_id AS "taskId", entity_type AS "entityType", entity_id AS "entityId", version_number AS "versionNumber", file_url AS "fileUrl", file_type AS "fileType", thumbnail_url AS "thumbnailUrl", uploader_id AS "uploaderId", created_at AS "createdAt", changelog, status, ai_params AS "aiParams" FROM versions`;
 
 const normalizeFileUrl = (fileId: unknown, fileUrl: unknown) => {
   if (typeof fileId === 'string' && UUID_PATTERN.test(fileId)) return `/api/files/${fileId}/content`;
@@ -65,18 +65,18 @@ versionsRouter.post('/', asyncHandler(async (req, res) => {
   if (validationError) { res.status(400).json({ error: validationError }); return; }
 
   const fileId = typeof req.body?.fileId === 'string' && UUID_PATTERN.test(req.body.fileId) ? req.body.fileId : null;
-  const fileUrl = normalizeFileUrl(fileId, req.body?.fileUrl);
-  if (!fileUrl) { res.status(400).json({ error: '请先上传文件或提供文件 URL。' }); return; }
   if (fileId) {
-    const file = await pool.query('SELECT 1 FROM project_files WHERE id=$1 AND project_id=$2 AND deleted_at IS NULL', [fileId, projectId]);
-    if (!file.rowCount) { res.status(400).json({ error: '文件不存在或不属于当前项目。' }); return; }
+    res.status(409).json({ error: '审核文件已在上传事务中创建版本，请勿再次提交版本记录。' });
+    return;
   }
+  const fileUrl = normalizeFileUrl(null, req.body?.fileUrl);
+  if (!fileUrl) { res.status(400).json({ error: '请先上传文件或提供文件 URL。' }); return; }
 
   const id = randomUUID();
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query(`INSERT INTO versions (id,task_id,entity_type,entity_id,version_number,file_id,file_url,file_type,thumbnail_url,uploader_id,changelog,status,ai_params) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)`, [id, req.body.taskId, entityType, entityId, readString(req.body?.versionNumber, 'V001'), fileId, fileUrl, readString(req.body?.fileType, 'image'), readString(req.body?.thumbnailUrl), req.authUser!.id, readString(req.body?.changelog), readString(req.body?.status, '待审核'), JSON.stringify(req.body?.aiParams ?? null)]);
+    await client.query(`INSERT INTO versions (id,task_id,entity_type,entity_id,version_number,file_url,file_type,thumbnail_url,uploader_id,changelog,status,ai_params) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)`, [id, req.body.taskId, entityType, entityId, readString(req.body?.versionNumber, 'V001'), fileUrl, readString(req.body?.fileType, 'image'), readString(req.body?.thumbnailUrl), req.authUser!.id, readString(req.body?.changelog), readString(req.body?.status, '待审核'), JSON.stringify(req.body?.aiParams ?? null)]);
     await client.query('UPDATE tasks SET latest_version_id=$1,status=$2 WHERE id=$3', [id, '待审核', req.body.taskId]);
     if (entityType !== 'project') {
       await client.query(`UPDATE ${entityType === 'shot' ? 'shots' : 'assets'} SET latest_version_id=$1,thumbnail_url=coalesce(nullif($2,''),thumbnail_url) WHERE id=$3`, [id, readString(req.body?.thumbnailUrl), entityId]);

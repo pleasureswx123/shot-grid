@@ -66,8 +66,14 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
         throw new Error('启用外链版本时必须填写外链媒体 URL。');
       }
 
+      const aiParams = {
+        modelName, prompt: prompt.trim(), seed: seed.trim(), cameraMotion, generationCost,
+        nasPath: selectedRegisteredFile?.nasPath || nasPath.trim(),
+        nasPlaybackUnsupported: selectedRegisteredFile?.storageKind === 'nas' && !selectedRegisteredFile.nasStreamable,
+        resolution: '3840x2160', aspectRatio: '2.39:1',
+      };
       const uploadedFile = selectedFile
-        ? await uploadVersionFile(selectedFile, { taskId: selectedTask.id, versionNumber, fileType })
+        ? await uploadVersionFile(selectedFile, { taskId: selectedTask.id, versionNumber, fileType, thumbnailUrl: thumbnailUrl.trim(), changelog: changelog.trim(), aiParams })
         : null;
 
       if (selectedFile && (!uploadedFile?.id || !uploadedFile.contentUrl)) {
@@ -76,7 +82,7 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
 
       const versionFileUrl = uploadedFile?.contentUrl || selectedRegisteredFile?.contentUrl || (selectedRegisteredFile ? `/api/files/${selectedRegisteredFile.id}/content` : '') || (useExternalVersion ? fileUrl.trim() : '');
 
-      await addVersion({
+      if (!uploadedFile) await addVersion({
         taskId: selectedTask.id,
         entityType: selectedTask.entityType,
         entityId: selectedTask.entityId,
@@ -88,17 +94,7 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
         uploaderId: currentUser.id,
         changelog: changelog.trim(),
         status: '待审核',
-        aiParams: {
-          modelName,
-          prompt: prompt.trim(),
-          seed: seed.trim(),
-          cameraMotion,
-          generationCost,
-          nasPath: selectedRegisteredFile?.nasPath || nasPath.trim(),
-          nasPlaybackUnsupported: selectedRegisteredFile?.storageKind === 'nas' && !selectedRegisteredFile.nasStreamable,
-          resolution: '3840x2160',
-          aspectRatio: '2.39:1'
-        }
+        aiParams
       });
 
       onClose();
