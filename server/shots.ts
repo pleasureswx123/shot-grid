@@ -5,6 +5,7 @@ import { pool } from './db';
 import { isEntityLockedForNonAdmin } from './workflow';
 import { asyncHandler, readNumber, readString, requireProjectAccessFromRequest, requireProjectWriteAccess, requireProjectWriteAccessFromRequest, UUID_PATTERN } from './apiUtils';
 import { ensureShotStorageStructure, removeShotStorageStructure } from './storage';
+import { insertTaskChain, SHOT_TASK_TEMPLATE } from './taskTemplates';
 
 export const shotsRouter = Router();
 
@@ -50,9 +51,9 @@ shotsRouter.post('/', asyncHandler(async (request, response) => {
   try {
     await client.query('BEGIN');
     const scene = await client.query(`INSERT INTO scenes (id, project_id, scene_code, name, description) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (project_id, scene_code) DO UPDATE SET scene_code = EXCLUDED.scene_code RETURNING id`, [randomUUID(), projectId, sceneCode, readString(request.body?.sceneName, `场次 ${sceneCode}`), readString(request.body?.sceneDescription)]);
-    const shot = await client.query(`WITH inserted AS (INSERT INTO shots (id, project_id, scene_id, shot_code, duration_sec, shot_type, camera_movement, description, dialogue, current_stage, assignee_id, status, thumbnail_url) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'视频生成',$10,$11,$12) RETURNING *) ${selectShot} FROM inserted sh JOIN scenes sc ON sc.id = sh.scene_id LEFT JOIN shot_assets sa ON sa.shot_id = sh.id LEFT JOIN assets a ON a.id = sa.asset_id AND a.deleted_at IS NULL GROUP BY sh.id, sh.project_id, sh.scene_id, sc.scene_code, sh.shot_code, sh.duration_sec, sh.shot_type, sh.camera_movement, sh.description, sh.dialogue, sh.current_stage, sh.assignee_id, sh.status, sh.latest_version_id, sh.thumbnail_url`, [randomUUID(), projectId, scene.rows[0].id, shotCode, readNumber(request.body?.durationSec, 5), readString(request.body?.shotType, '中景'), readString(request.body?.cameraMovement, '固定镜头'), readString(request.body?.description, '新建镜头描述'), readString(request.body?.dialogue), readString(request.body?.assigneeId, request.authUser!.id), readString(request.body?.status, '未开始'), readString(request.body?.thumbnailUrl)]);
+    const shot = await client.query(`WITH inserted AS (INSERT INTO shots (id, project_id, scene_id, shot_code, duration_sec, shot_type, camera_movement, description, dialogue, current_stage, assignee_id, status, thumbnail_url) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'台本',$10,$11,$12) RETURNING *) ${selectShot} FROM inserted sh JOIN scenes sc ON sc.id = sh.scene_id LEFT JOIN shot_assets sa ON sa.shot_id = sh.id LEFT JOIN assets a ON a.id = sa.asset_id AND a.deleted_at IS NULL GROUP BY sh.id, sh.project_id, sh.scene_id, sc.scene_code, sh.shot_code, sh.duration_sec, sh.shot_type, sh.camera_movement, sh.description, sh.dialogue, sh.current_stage, sh.assignee_id, sh.status, sh.latest_version_id, sh.thumbnail_url`, [randomUUID(), projectId, scene.rows[0].id, shotCode, readNumber(request.body?.durationSec, 5), readString(request.body?.shotType, '中景'), readString(request.body?.cameraMovement, '固定镜头'), readString(request.body?.description, '新建镜头描述'), readString(request.body?.dialogue), readString(request.body?.assigneeId, request.authUser!.id), readString(request.body?.status, '未开始'), readString(request.body?.thumbnailUrl)]);
     const shotId = shot.rows[0].id;
-    await client.query(`INSERT INTO tasks (id, project_id, title, entity_type, entity_id, pipeline_stage, assignee_id, status, priority, due_date, requirements) VALUES ($1,$2,$3,'shot',$4,'视频生成',$5,'制作中','中',now()::date + 2,$6)`, [randomUUID(), projectId, `${sceneCode} / ${shotCode} - 视频生成`, shotId, readString(request.body?.assigneeId, request.authUser!.id), `${sceneCode} / ${shotCode} 的视频生成阶段制作要求`]);
+    await insertTaskChain(client, { projectId, entityType: 'shot', entityId: shotId, label: `${sceneCode} / ${shotCode}`, assigneeId: readString(request.body?.assigneeId, request.authUser!.id), template: SHOT_TASK_TEMPLATE, firstStatus: readString(request.body?.status, '未开始') === '制作中' ? '制作中' : '未开始' });
     await recordAuditLog(client, request, { action: AUDIT_EVENTS.SHOT_CREATE, projectId, entityType: 'shot', entityId: shotId, details: { sceneCode, shotCode, assigneeId: readString(request.body?.assigneeId, request.authUser!.id), status: readString(request.body?.status, '未开始') } });
     await client.query('COMMIT'); response.status(201).json({ shot: shot.rows[0] });
   } catch (e:any) { await client.query('ROLLBACK'); if (e?.code === '23505') { response.status(409).json({ error: '镜头编号已经存在。' }); return; } throw e; } finally { client.release(); }
@@ -88,14 +89,14 @@ shotsRouter.post('/bulk', asyncHandler(async (request, response) => {
       const shotId = randomUUID();
       const savedShot = await client.query<{ id: string }>(
         `INSERT INTO shots (id, project_id, scene_id, shot_code, duration_sec, shot_type, camera_movement, description, dialogue, current_stage, assignee_id, status, thumbnail_url)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'','视频生成',$9,'未开始',$10)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'','台本',$9,'未开始',$10)
          ON CONFLICT (project_id, shot_code) DO UPDATE SET
            scene_id = EXCLUDED.scene_id,
            duration_sec = EXCLUDED.duration_sec,
            shot_type = EXCLUDED.shot_type,
            camera_movement = EXCLUDED.camera_movement,
            description = EXCLUDED.description,
-           current_stage = '视频生成',
+           current_stage = '台本',
            assignee_id = EXCLUDED.assignee_id
          RETURNING id`,
         [shotId, projectId, scene.rows[0].id, shot.shotCode, shot.durationSec, shot.shotType, shot.cameraMovement, shot.description, shot.assigneeId, 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80'],
@@ -104,19 +105,14 @@ shotsRouter.post('/bulk', asyncHandler(async (request, response) => {
       importedShotIds.push(savedShotId);
       const directory = await ensureShotStorageStructure({ projectCode, shotId: savedShotId, shotCode: shot.shotCode, sceneCode: shot.sceneCode });
       if (directory.createdRoot) createdDirectories.push(shot.shotCode);
-      await client.query(
-        `INSERT INTO tasks (id, project_id, title, entity_type, entity_id, pipeline_stage, assignee_id, status, priority, due_date, requirements)
-         SELECT $1,$2,$3,'shot',$4,'视频生成',$5,'制作中','中',now()::date + 2,$6
-         WHERE NOT EXISTS (SELECT 1 FROM tasks WHERE project_id = $2 AND entity_type = 'shot' AND entity_id = $4 AND pipeline_stage = '视频生成' AND deleted_at IS NULL)`,
-        [randomUUID(), projectId, `${shot.sceneCode} / ${shot.shotCode} - 视频生成`, savedShotId, shot.assigneeId, `${shot.sceneCode} / ${shot.shotCode} 的视频生成阶段制作要求`],
-      );
+      await insertTaskChain(client, { projectId, entityType: 'shot', entityId: savedShotId, label: `${shot.sceneCode} / ${shot.shotCode}`, assigneeId: shot.assigneeId, template: SHOT_TASK_TEMPLATE });
     }
 
     await recordAuditLog(client, request, { action: AUDIT_EVENTS.SHOT_BULK_IMPORT, projectId, entityType: 'shot', details: { count: importedShotIds.length, shotIds: importedShotIds } });
     await client.query('COMMIT');
     const scenesResult = await pool.query(`${selectScene} WHERE sc.project_id = $1 AND sc.scene_code = ANY($2::text[]) GROUP BY sc.id ORDER BY sc.sort_order ASC, sc.scene_code ASC`, [projectId, [...importedSceneCodes]]);
     const shotsResult = await pool.query(`${selectShot} FROM shots sh JOIN scenes sc ON sc.id = sh.scene_id LEFT JOIN shot_assets sa ON sa.shot_id = sh.id LEFT JOIN assets a ON a.id = sa.asset_id AND a.deleted_at IS NULL WHERE sh.id = ANY($1::uuid[]) AND sh.deleted_at IS NULL GROUP BY sh.id, sc.scene_code ORDER BY sh.sort_order ASC, sh.shot_code ASC`, [importedShotIds]);
-    const tasksResult = await pool.query(`${selectTask} WHERE project_id = $1 AND entity_type = 'shot' AND entity_id = ANY($2::uuid[]) AND pipeline_stage = '视频生成' AND deleted_at IS NULL ORDER BY created_at DESC`, [projectId, importedShotIds]);
+    const tasksResult = await pool.query(`${selectTask} WHERE project_id = $1 AND entity_type = 'shot' AND entity_id = ANY($2::uuid[]) AND deleted_at IS NULL ORDER BY entity_id, due_date`, [projectId, importedShotIds]);
     response.status(201).json({ scenes: scenesResult.rows, shots: shotsResult.rows, tasks: tasksResult.rows });
   } catch (e: any) {
     await client.query('ROLLBACK');

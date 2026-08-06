@@ -91,16 +91,16 @@ test('duplicate scene records are merged and shots point to one canonical scene'
   assert.equal(normalized.scenes[0].shotCount, 2);
   assert.equal(normalized.shots[0].sceneId, normalized.shots[1].sceneId);
   const shotTasks = normalized.tasks.filter(task => task.entityType === 'shot');
-  assert.equal(shotTasks.length, 2);
-  assert.equal(shotTasks[0].title, 'SC01 / SH001 - 视频生成');
-  assert.equal(shotTasks[0].pipelineStage, '视频生成');
+  assert.equal(shotTasks.length, 12);
+  assert.equal(shotTasks[0].title, 'SC01 / SH001 - 台本');
+  assert.equal(shotTasks[0].pipelineStage, '台本');
 });
 
 test('pipeline tasks carry the scene and shot code', () => {
   const tasks = createShotPipelineTasks('shot-1', 'SC03', 'SH021', 'user-1');
-  assert.equal(tasks.length, 1);
-  assert.equal(tasks[0].title, 'SC03 / SH021 - 视频生成');
-  assert.equal(tasks[0].pipelineStage, '视频生成');
+  assert.equal(tasks.length, 6);
+  assert.deepEqual(tasks.map(task => task.pipelineStage), ['台本', '视觉准备', '视频生成', '剪辑', '声音', '成片']);
+  assert.equal(tasks[0].title, 'SC03 / SH021 - 台本');
   assert.equal(tasks[0].prerequisiteTaskId, undefined);
 });
 
@@ -110,12 +110,12 @@ test('new assets receive the complete asset production task template', () => {
     tasks.map(task => task.pipelineStage),
     ['需求', '概念设计', '修改', '定稿'],
   );
-  assert.equal(tasks[0].status, '已完成');
-  assert.equal(tasks[1].status, '制作中');
+  assert.equal(tasks[0].status, '制作中');
+  assert.equal(tasks[1].status, '已阻塞');
   assert.equal(tasks[1].prerequisiteTaskId, tasks[0].id);
 });
 
-test('legacy per-shot sound and final tasks migrate to one pair of project tasks', () => {
+test('shot and project finishing tasks coexist at their respective scopes', () => {
   const shot = {
     ...createShot('shot-1', 'scene-1', 'SH001'),
     currentStage: '声音' as any,
@@ -176,19 +176,11 @@ test('legacy per-shot sound and final tasks migrate to one pair of project tasks
 
   const normalized = normalizeScenesAndTasks(project, state);
   const projectTasks = normalized.tasks.filter(task => task.entityType === 'project');
-  assert.equal(normalized.shots[0].currentStage, '视频生成');
+  assert.equal(normalized.shots[0].currentStage, '声音');
   assert.equal(projectTasks.length, 2);
   assert.deepEqual(projectTasks.map(task => task.pipelineStage).sort(), ['声音', '成片']);
-  assert.equal(normalized.tasks.some(task =>
-    task.entityType === 'shot' && (task.pipelineStage === '声音' || task.pipelineStage === '成片')
-  ), false);
-  assert.equal(normalized.versions[0].entityType, 'project');
-  assert.equal(normalized.versions[0].entityId, project.id);
-  assert.equal(normalized.tasks.filter(task => task.entityType === 'shot').length, 1);
-  assert.equal(
-    normalized.tasks.find(task => task.entityType === 'shot')?.pipelineStage,
-    '视频生成',
-  );
+  assert.equal(normalized.tasks.filter(task => task.entityType === 'shot').length, 6);
+  assert.deepEqual(normalized.tasks.filter(task => task.entityType === 'shot').map(task => task.pipelineStage), ['台本', '视觉准备', '视频生成', '剪辑', '声音', '成片']);
 });
 
 test('project sound and final tasks keep project entity fields for version review flow', () => {

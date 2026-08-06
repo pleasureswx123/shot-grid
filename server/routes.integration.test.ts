@@ -158,6 +158,35 @@ maybeDescribe('server API integration routes', () => {
     assert.equal(removed.response.status, 204);
   });
 
+  test('creates complete ordered task chains for single shots and assets', async () => {
+    const shot = await request('POST', '/api/shots', ids.creator, { projectId: ids.project, sceneCode: 'CHAIN', shotCode: 'CHAIN001' });
+    assert.equal(shot.response.status, 201);
+    const shotTasks = await pool.query('SELECT id,pipeline_stage,status,prerequisite_task_id FROM tasks WHERE entity_id=$1 ORDER BY due_date', [shot.data.shot.id]);
+    assert.deepEqual(shotTasks.rows.map(row => row.pipeline_stage), ['台本', '视觉准备', '视频生成', '剪辑', '声音', '成片']);
+    assert.equal(shotTasks.rows[0].status, '未开始');
+    shotTasks.rows.slice(1).forEach((row, index) => { assert.equal(row.status, '已阻塞'); assert.equal(row.prerequisite_task_id, shotTasks.rows[index].id); });
+
+    const asset = await request('POST', '/api/assets', ids.creator, { projectId: ids.project, name: '链路资产', category: '道具' });
+    assert.equal(asset.response.status, 201);
+    const assetTasks = await pool.query('SELECT id,pipeline_stage,status,prerequisite_task_id FROM tasks WHERE entity_id=$1 ORDER BY due_date', [asset.data.asset.id]);
+    assert.deepEqual(assetTasks.rows.map(row => row.pipeline_stage), ['需求', '概念设计', '修改', '定稿']);
+    assert.equal(assetTasks.rows[0].status, '制作中');
+    assetTasks.rows.slice(1).forEach((row, index) => { assert.equal(row.status, '已阻塞'); assert.equal(row.prerequisite_task_id, assetTasks.rows[index].id); });
+  });
+
+  test('bulk imports are idempotent and roll back incomplete asset chains', async () => {
+    const body = { projectId: ids.project, assets: [{ name: '批量链路资产', category: '角色' }] };
+    assert.equal((await request('POST', '/api/assets/bulk', ids.creator, body)).response.status, 201);
+    assert.equal((await request('POST', '/api/assets/bulk', ids.creator, body)).response.status, 201);
+    const count = await pool.query(`SELECT count(*)::int AS count FROM tasks t JOIN assets a ON a.id=t.entity_id WHERE a.name='批量链路资产' AND t.deleted_at IS NULL`);
+    assert.equal(count.rows[0].count, 4);
+
+    const failed = await request('POST', '/api/assets/bulk', ids.creator, { projectId: ids.project, assets: [{ name: '应回滚资产', category: '无效分类' }] });
+    assert.equal(failed.response.status, 500);
+    const rolledBack = await pool.query(`SELECT count(*)::int AS count FROM assets WHERE name='应回滚资产'`);
+    assert.equal(rolledBack.rows[0].count, 0);
+  });
+
   test('updates task status, rejects invalid entityType, creates versions, review notes, and chat messages', async () => {
     const asset = await request('POST', '/api/assets', ids.creator, { projectId: ids.project, name: '版本资产', category: '道具' });
     createdAssetId = asset.data.asset.id;
