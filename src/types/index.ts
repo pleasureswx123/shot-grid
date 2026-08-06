@@ -70,11 +70,18 @@ export interface Version {
 export interface NoteAnnotation {
   id: string;
   type: 'brush' | 'circle' | 'arrow' | 'rect' | 'text';
+  // Legacy pixel coordinates are kept optional for older notes.
   points?: number[];
   x?: number;
   y?: number;
   width?: number;
   height?: number;
+  // Normalized coordinates relative to the displayed media bounds.
+  pointRatios?: number[];
+  xRatio?: number;
+  yRatio?: number;
+  widthRatio?: number;
+  heightRatio?: number;
   text?: string;
   color: string;
 }

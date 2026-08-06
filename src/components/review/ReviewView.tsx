@@ -9,6 +9,73 @@ import {
 import type { NoteAnnotation, Version, VersionStatus } from '../../types';
 import { CanvasAnnotator } from '../common/CanvasAnnotator';
 
+const getNormalizedPoints = (annotation: NoteAnnotation, width: number, height: number) => {
+  if (annotation.pointRatios?.length) return annotation.pointRatios;
+  if (!annotation.points?.length) return [];
+  return annotation.points.map((value, index) => value / (index % 2 === 0 ? width : height));
+};
+
+const AnnotationPlaybackOverlay: React.FC<{
+  annotations: NoteAnnotation[];
+  displaySize: { width: number; height: number };
+}> = ({ annotations, displaySize }) => {
+  const width = Math.max(1, Math.round(displaySize.width));
+  const height = Math.max(1, Math.round(displaySize.height));
+
+  return (
+    <svg
+      className="pointer-events-none absolute inset-0 z-10"
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+    >
+      {annotations.map(annotation => {
+        const color = annotation.color || '#ef4444';
+        if (annotation.type === 'circle') {
+          const x = (annotation.xRatio ?? ((annotation.x ?? 0) / width)) * width;
+          const y = (annotation.yRatio ?? ((annotation.y ?? 0) / height)) * height;
+          const circleWidth = (annotation.widthRatio ?? ((annotation.width ?? 0) / width)) * width;
+          const circleHeight = (annotation.heightRatio ?? ((annotation.height ?? 0) / height)) * height;
+          return (
+            <ellipse
+              key={annotation.id}
+              cx={x + circleWidth / 2}
+              cy={y + circleHeight / 2}
+              rx={circleWidth / 2}
+              ry={circleHeight / 2}
+              fill="none"
+              stroke={color}
+              strokeWidth={3}
+            />
+          );
+        }
+
+        const ratios = getNormalizedPoints(annotation, width, height);
+        const points = ratios.map((value, index) => value * (index % 2 === 0 ? width : height));
+        if (annotation.type === 'arrow' && points.length >= 4) {
+          const [x1, y1, x2, y2] = points;
+          return (
+            <g key={annotation.id} stroke={color} strokeWidth={3} strokeLinecap="round" fill="none">
+              <line x1={x1} y1={y1} x2={x2} y2={y2} />
+              <path d={`M ${x2} ${y2} l -12 -6 M ${x2} ${y2} l -12 6`} />
+            </g>
+          );
+        }
+
+        if (annotation.type === 'brush' && points.length >= 4) {
+          const path = points.reduce((segments, value, index) => {
+            if (index % 2 !== 0) return segments;
+            const command = index === 0 ? 'M' : 'L';
+            return `${segments} ${command} ${value} ${points[index + 1]}`;
+          }, '');
+          return <path key={annotation.id} d={path} fill="none" stroke={color} strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" />;
+        }
+
+        return null;
+      })}
+    </svg>
+  );
+};
 
 interface ReviewMediaPreviewProps {
   version: Version;
@@ -93,6 +160,34 @@ export const ReviewView: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [showCanvasOverlay, setShowCanvasOverlay] = useState(true);
+  const mediaContainerRef = useRef<HTMLDivElement>(null);
+  const [mediaNaturalSize, setMediaNaturalSize] = useState({ width: 16, height: 9 });
+  const [mediaDisplayRect, setMediaDisplayRect] = useState({ width: 0, height: 0, left: 0, top: 0 });
+  const [playbackAnnotations, setPlaybackAnnotations] = useState<NoteAnnotation[]>([]);
+
+  useEffect(() => {
+    const container = mediaContainerRef.current;
+    if (!container) return;
+
+    const updateMediaDisplayRect = () => {
+      const rect = container.getBoundingClientRect();
+      const containerRatio = rect.width / Math.max(rect.height, 1);
+      const mediaRatio = mediaNaturalSize.width / Math.max(mediaNaturalSize.height, 1);
+      const width = containerRatio > mediaRatio ? rect.height * mediaRatio : rect.width;
+      const height = containerRatio > mediaRatio ? rect.height : rect.width / mediaRatio;
+      setMediaDisplayRect({
+        width,
+        height,
+        left: (rect.width - width) / 2,
+        top: (rect.height - height) / 2,
+      });
+    };
+
+    updateMediaDisplayRect();
+    const resizeObserver = new ResizeObserver(updateMediaDisplayRect);
+    resizeObserver.observe(container);
+    return () => resizeObserver.disconnect();
+  }, [mediaNaturalSize.height, mediaNaturalSize.width]);
 
   // New Note state
   const [newNoteText, setNewNoteText] = useState('');
@@ -138,6 +233,10 @@ export const ReviewView: React.FC = () => {
       }
     }
   };
+
+  useEffect(() => {
+    setPlaybackAnnotations([]);
+  }, [activeVersion?.id]);
 
   const handleAddNote = () => {
     if (!newNoteText.trim() || !activeVersion) return;
@@ -306,7 +405,7 @@ export const ReviewView: React.FC = () => {
         <div className="flex-1 flex flex-col bg-slate-950 p-4 overflow-hidden relative">
           {reviewMode === 'single' ? (
             /* Single Canvas Mode */
-            <div className="flex-1 relative bg-black rounded-xl border border-slate-800 overflow-hidden flex items-center justify-center">
+            <div ref={mediaContainerRef} className="flex-1 relative bg-black rounded-xl border border-slate-800 overflow-hidden flex items-center justify-center">
               {activeVersion && activeVersion.fileType === 'video' ? (
                 <video
                   ref={videoRef}
@@ -318,27 +417,53 @@ export const ReviewView: React.FC = () => {
                   onTimeUpdate={() => {
                     if (videoRef.current) setCurrentTimeSec(videoRef.current.currentTime);
                   }}
+                  onLoadedMetadata={event => setMediaNaturalSize({
+                    width: event.currentTarget.videoWidth || 16,
+                    height: event.currentTarget.videoHeight || 9,
+                  })}
                   className="w-full h-full object-contain"
                 />
               ) : (
-                <img src={activeVersion?.fileUrl} alt="review" className="w-full h-full object-contain" />
+                <img
+                  src={activeVersion?.fileUrl}
+                  alt="review"
+                  onLoad={event => setMediaNaturalSize({
+                    width: event.currentTarget.naturalWidth || 16,
+                    height: event.currentTarget.naturalHeight || 9,
+                  })}
+                  className="w-full h-full object-contain"
+                />
               )}
 
               {/* Drawing Canvas Overlay */}
-              {showCanvasOverlay && (
-                <CanvasAnnotator
-                  width={800}
-                  height={450}
-                  noteKind={isMandatory ? 'mandatory' : 'normal'}
-                  onSaveAnnotation={(dataUrl, annotations) => {
-                    setLastAnnotationData(dataUrl);
-                    setLastAnnotations(annotations);
+              {mediaDisplayRect.width > 0 && mediaDisplayRect.height > 0 && (
+                <div
+                  className="absolute z-20"
+                  style={{
+                    width: mediaDisplayRect.width,
+                    height: mediaDisplayRect.height,
+                    left: mediaDisplayRect.left,
+                    top: mediaDisplayRect.top,
                   }}
-                  onClear={() => {
-                    setLastAnnotationData(null);
-                    setLastAnnotations([]);
-                  }}
-                />
+                >
+                  {playbackAnnotations.length > 0 && (
+                    <AnnotationPlaybackOverlay annotations={playbackAnnotations} displaySize={mediaDisplayRect} />
+                  )}
+                  {showCanvasOverlay && (
+                    <CanvasAnnotator
+                      displaySize={mediaDisplayRect}
+                      noteKind={isMandatory ? 'mandatory' : 'normal'}
+                      onSaveAnnotation={(dataUrl, annotations) => {
+                        setLastAnnotationData(dataUrl);
+                        setLastAnnotations(annotations);
+                      }}
+                      onClear={() => {
+                        setLastAnnotationData(null);
+                        setLastAnnotations([]);
+                      }}
+                    />
+                  )}
+                </div>
               )}
 
               {/* Control Bar Overlay */}
@@ -489,7 +614,10 @@ export const ReviewView: React.FC = () => {
               <div key={n.id} className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/60 space-y-1.5 text-xs">
                 <div className="flex items-center justify-between">
                   <button
-                    onClick={() => n.timestampSec !== undefined && jumpToTime(n.timestampSec)}
+                    onClick={() => {
+                      if (n.timestampSec !== undefined) jumpToTime(n.timestampSec);
+                      setPlaybackAnnotations(n.annotations || []);
+                    }}
                     className="px-2 py-0.5 bg-indigo-600/30 hover:bg-indigo-600 text-indigo-300 hover:text-white rounded text-[10px] font-mono font-bold transition flex items-center space-x-1"
                   >
                     <Clock className="w-3 h-3" />
