@@ -92,6 +92,9 @@ const PathOnlyNotice: React.FC<{ nasPath?: string }> = ({ nasPath }) => (
 
 const ReviewMediaPreview: React.FC<ReviewMediaPreviewProps> = ({ version, alt }) => {
   if (version.aiParams?.nasPlaybackUnsupported) return <PathOnlyNotice nasPath={version.aiParams.nasPath} />;
+  if (version.fileType === 'audio') {
+    return <audio src={version.fileUrl} controls className="w-full" />;
+  }
   if (version.fileType === 'video') {
     return (
       <video
@@ -166,7 +169,7 @@ export const ReviewView: React.FC = () => {
   }, [activeVersion, compareVersionId, compareVersionOptions]);
 
   // Video playback
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const mediaRef = useRef<HTMLMediaElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [showCanvasOverlay, setShowCanvasOverlay] = useState(true);
@@ -212,19 +215,19 @@ export const ReviewView: React.FC = () => {
   const [newPlaylistDueAt, setNewPlaylistDueAt] = useState('');
 
   const togglePlay = () => {
-    if (videoRef.current) {
-      if (isPlaying) videoRef.current.pause();
-      else videoRef.current.play();
+    if (mediaRef.current) {
+      if (isPlaying) mediaRef.current.pause();
+      else mediaRef.current.play();
       setIsPlaying(!isPlaying);
     }
   };
 
   const jumpToTime = (timeSec: number) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = timeSec;
+    if (mediaRef.current) {
+      mediaRef.current.currentTime = timeSec;
       setCurrentTimeSec(timeSec);
       if (!isPlaying) {
-        videoRef.current.play();
+        mediaRef.current.play();
         setIsPlaying(true);
       }
     }
@@ -250,7 +253,7 @@ export const ReviewView: React.FC = () => {
 
   const handleAddNote = () => {
     if (!newNoteText.trim() || !activeVersion) return;
-    const timeSec = videoRef.current ? Math.round(videoRef.current.currentTime * 100) / 100 : 0;
+    const timeSec = mediaRef.current ? Math.round(mediaRef.current.currentTime * 100) / 100 : 0;
     const mins = Math.floor(timeSec / 60);
     const secs = (timeSec % 60).toFixed(2);
     const timeStr = `00:${mins < 10 ? '0' : ''}${mins}:${secs.padStart(5, '0')}`;
@@ -380,7 +383,7 @@ export const ReviewView: React.FC = () => {
                   }`}
                 >
                   <div className="relative w-16 h-12 rounded bg-black overflow-hidden flex-shrink-0">
-                    <img src={v.thumbnailUrl} alt={v.versionNumber} className="w-full h-full object-cover" />
+                    {v.fileType === 'audio' ? <div className="flex h-full items-center justify-center text-indigo-300">♪ 音频</div> : <img src={v.thumbnailUrl} alt={v.versionNumber} className="w-full h-full object-cover" />}
                     <span className="absolute bottom-1 right-1 px-1 py-0.2 bg-black/80 rounded text-[9px] font-bold text-indigo-300 font-mono">
                       {v.versionNumber}
                     </span>
@@ -418,16 +421,29 @@ export const ReviewView: React.FC = () => {
             <div ref={mediaContainerRef} className="flex-1 relative bg-black rounded-xl border border-slate-800 overflow-hidden flex items-center justify-center">
               {activeVersion?.aiParams?.nasPlaybackUnsupported ? (
                 <PathOnlyNotice nasPath={activeVersion.aiParams.nasPath} />
+              ) : activeVersion && activeVersion.fileType === 'audio' ? (
+                <div className="flex w-full flex-col items-center gap-5 px-8">
+                  <FileVideo className="h-16 w-16 text-indigo-400" />
+                  <audio
+                    ref={mediaRef as React.RefObject<HTMLAudioElement>}
+                    src={activeVersion.fileUrl}
+                    controls
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                    onTimeUpdate={event => setCurrentTimeSec(event.currentTarget.currentTime)}
+                    className="w-full max-w-2xl"
+                  />
+                </div>
               ) : activeVersion && activeVersion.fileType === 'video' ? (
                 <video
-                  ref={videoRef}
+                  ref={mediaRef as React.RefObject<HTMLVideoElement>}
                   src={activeVersion.fileUrl}
                   poster={activeVersion.thumbnailUrl}
                   controls
                   onPlay={() => setIsPlaying(true)}
                   onPause={() => setIsPlaying(false)}
                   onTimeUpdate={() => {
-                    if (videoRef.current) setCurrentTimeSec(videoRef.current.currentTime);
+                    if (mediaRef.current) setCurrentTimeSec(mediaRef.current.currentTime);
                   }}
                   onLoadedMetadata={event => setMediaNaturalSize({
                     width: event.currentTarget.videoWidth || 16,
@@ -448,7 +464,7 @@ export const ReviewView: React.FC = () => {
               )}
 
               {/* Drawing Canvas Overlay */}
-              {mediaDisplayRect.width > 0 && mediaDisplayRect.height > 0 && (
+              {activeVersion?.fileType !== 'audio' && mediaDisplayRect.width > 0 && mediaDisplayRect.height > 0 && (
                 <div
                   className="absolute z-20"
                   style={{
@@ -479,7 +495,7 @@ export const ReviewView: React.FC = () => {
               )}
 
               {/* Control Bar Overlay */}
-              {activeVersion && activeVersion.fileType === 'video' && !activeVersion.aiParams?.nasPlaybackUnsupported && (
+              {activeVersion && (activeVersion.fileType === 'video' || activeVersion.fileType === 'audio') && !activeVersion.aiParams?.nasPlaybackUnsupported && (
                 <div className="pointer-events-none absolute top-0 inset-x-0 p-3 bg-gradient-to-b from-black/90 via-black/45 to-transparent z-30 flex items-center justify-between text-xs font-mono">
                   <div className="flex items-center space-x-3">
                     <button onClick={togglePlay} className="pointer-events-auto p-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full transition">

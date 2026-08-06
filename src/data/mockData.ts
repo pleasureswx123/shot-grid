@@ -185,6 +185,7 @@ export const mockVersions: Version[] = [
     changelog: '修改了人物转头速度与背景烟雾浓度，优化了红光频闪幅度。',
     status: '待审核',
     aiParams: {
+      mediaType: 'video',
       modelName: 'Kling 1.5 Pro',
       modelVersion: '1.5-Pro High Quality',
       prompt: 'Cinematic wide shot, male commander Gou Aotian wakes up inside休眠舱, steam rushing out, red emergency light pulsing slowly, camera slow push in, 24fps film motion',
@@ -216,6 +217,7 @@ export const mockVersions: Version[] = [
     changelog: '调整动作平滑度，修正人物眼神发散问题。',
     status: '已退回',
     aiParams: {
+      mediaType: 'video',
       modelName: 'Runway Gen-3 Alpha',
       prompt: 'Astronaut waking up abruptly in sci-fi cabin, lens flare, slow motion',
       seed: 1948201,
@@ -236,6 +238,7 @@ export const mockVersions: Version[] = [
     changelog: '首次测试视频生成效果。',
     status: '已退回',
     aiParams: {
+      mediaType: 'video',
       modelName: 'Luma Dream Machine',
       prompt: 'Sci-fi wake up shot in dark pod',
       seed: 772105,
@@ -256,6 +259,7 @@ export const mockVersions: Version[] = [
     changelog: '已按导演要求减少控制台过曝，提升火花质感。',
     status: '待审核',
     aiParams: {
+      mediaType: 'video',
       modelName: 'Hailuo MiniMax',
       prompt: 'Spaceship control room alarm flashing, Sparks flying, cinematic lighting, 2.39:1',
       seed: 9284012,
@@ -276,6 +280,7 @@ export const mockVersions: Version[] = [
     changelog: '优化玻璃反光与陨石碎片轨迹。',
     status: '待审核',
     aiParams: {
+      mediaType: 'video',
       modelName: 'Runway Gen-3',
       prompt: 'Space corridor sprinting with thruster attached, camera tracking alongside, asteroid strike outside window',
       seed: 559124,
@@ -296,6 +301,7 @@ export const mockVersions: Version[] = [
     changelog: '定稿版本：补充了三视图与脸部微细节赛博接口。',
     status: '已通过',
     aiParams: {
+      mediaType: 'image',
       modelName: 'Midjourney V6',
       prompt: 'Sci-fi male commander Gou Aotian concept art, front side back views, highly detailed',
       seed: 33901,

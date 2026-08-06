@@ -18,6 +18,7 @@ import {
   sha256File,
 } from './storage';
 import { AUDIT_EVENTS, recordAuditLog } from './audit';
+import { validateKnownMediaMime, validateVersionMediaExtension } from './mediaValidation';
 
 const execFileAsync = promisify(execFile);
 
@@ -45,7 +46,9 @@ const EXTENSION_MIME_PREFIXES = new Map<string, string[]>([
 ]);
 const DESIGN_SOURCE_EXTENSIONS = new Set(['exr', 'dpx', 'psd', 'psb', 'ai', 'aep', 'prproj', 'drp', 'blend', 'c4d', 'ma', 'mb', 'fbx', 'obj', 'abc', 'usd', 'usda', 'usdc']);
 
-const validateMimeForExtension = (extension: string, mimeType: string): string | null => {
+export const validateMimeForExtension = (extension: string, mimeType: string): string | null => {
+  const mediaResult = validateKnownMediaMime(extension, mimeType);
+  if (mediaResult !== undefined) return mediaResult;
   const normalizedMimeType = (mimeType || 'application/octet-stream').toLowerCase();
   const allowedPrefixes = EXTENSION_MIME_PREFIXES.get(extension);
   if (allowedPrefixes?.some(prefix => normalizedMimeType.startsWith(prefix))) return null;
@@ -312,6 +315,13 @@ filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, res
       response.status(400).json({ error: mimeError });
       return;
     }
+    if (fileType === 'review') {
+      const mediaError = validateVersionMediaExtension(String(request.body.versionFileType || ''), extension);
+      if (mediaError) {
+        response.status(400).json({ error: mediaError });
+        return;
+      }
+    }
     const scanStatus = await scanUploadForThreats(temporaryPath);
     const storageKey = createManagedStorageKey({
       projectCode: access.code,
@@ -348,7 +358,7 @@ filesRouter.post('/upload', acceptSingleUpload, asyncHandler(async (request, res
         await client.query(
           `INSERT INTO versions (id,task_id,entity_type,entity_id,version_number,file_url,file_type,thumbnail_url,uploader_id,changelog,ai_params)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)`,
-          [versionId, taskId, versionEntityType, versionEntityId, versionNumber || 'V001', `/api/files/${fileId}/content`, request.body.versionFileType === 'image' ? 'image' : 'video', String(request.body.thumbnailUrl || ''), request.authUser!.id, String(request.body.changelog || ''), String(request.body.aiParams || 'null')],
+          [versionId, taskId, versionEntityType, versionEntityId, versionNumber || 'V001', `/api/files/${fileId}/content`, request.body.versionFileType, request.body.versionFileType === 'audio' ? '' : String(request.body.thumbnailUrl || ''), request.authUser!.id, String(request.body.changelog || ''), String(request.body.aiParams || 'null')],
         );
       }
       const result = await client.query<FileRow>(

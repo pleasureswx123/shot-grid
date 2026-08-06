@@ -16,7 +16,7 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
   const selectedTask = tasks.find(t => t.id === taskId) || activeTask;
 
   const [versionNumber, setVersionNumber] = useState<string>('V003');
-  const [fileType, setFileType] = useState<'video' | 'image'>('video');
+  const [fileType, setFileType] = useState<'video' | 'image' | 'audio'>('video');
   const [fileUrl, setFileUrl] = useState<string>('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -27,6 +27,10 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
   const [selectedRegisteredFileId, setSelectedRegisteredFileId] = useState('');
 
   // AI Parameters
+  const [generationPlatform, setGenerationPlatform] = useState<string>('可灵');
+  const [referenceImages, setReferenceImages] = useState<string>('');
+  const [postProcessingNotes, setPostProcessingNotes] = useState<string>('');
+  const [repairedFileUrl, setRepairedFileUrl] = useState<string>('');
   const [modelName, setModelName] = useState<string>('Kling 1.5 Pro');
   const [prompt, setPrompt] = useState<string>('Cinematic shot, astronaut waking up inside dark spaceship pod, volumetric emergency red pulsing light --ar 2.39:1');
   const [seed, setSeed] = useState<string>('88491204');
@@ -66,8 +70,12 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
         throw new Error('启用外链版本时必须填写外链媒体 URL。');
       }
 
-      const aiParams = {
-        modelName, prompt: prompt.trim(), seed: seed.trim(), cameraMotion, generationCost,
+      const aiParams = fileType === 'audio' ? undefined : {
+        mediaType: fileType, generationPlatform, modelName, prompt: prompt.trim(), seed: seed.trim(), cameraMotion, generationCost,
+        referenceImageUrls: referenceImages.split(/[,\n]/).map(value => value.trim()).filter(Boolean),
+        isPostProcessed: Boolean(postProcessingNotes.trim() || repairedFileUrl.trim()),
+        postProcessingNotes: postProcessingNotes.trim() || undefined, repairedFileUrl: repairedFileUrl.trim() || undefined,
+        ...(fileType === 'video' ? { cameraMotion } : {}),
         nasPath: selectedRegisteredFile?.nasPath || nasPath.trim(),
         nasPlaybackUnsupported: selectedRegisteredFile?.storageKind === 'nas' && !selectedRegisteredFile.nasStreamable,
         resolution: '3840x2160', aspectRatio: '2.39:1',
@@ -150,11 +158,12 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
               <label className="text-slate-400 font-semibold">文件类型</label>
               <select
                 value={fileType}
-                onChange={e => setFileType(e.target.value as any)}
+                onChange={e => { setFileType(e.target.value as 'video' | 'image' | 'audio'); setSelectedFile(null); }}
                 className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-xs text-slate-200"
               >
                 <option value="video">MP4 视频文件</option>
                 <option value="image">PNG / JPG 图像文件</option>
+                <option value="audio">WAV / MP3 音频文件</option>
               </select>
             </div>
           </div>
@@ -189,10 +198,10 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
             <label className="text-slate-400 font-semibold">上传审核文件（必选）</label>
             <label className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-slate-700 bg-slate-800/60 p-3 text-slate-300 hover:border-indigo-500 cursor-pointer">
               <Upload className="w-4 h-4" />
-              <span>{selectedFile ? selectedFile.name : '选择本地视频或图片并上传到服务器托管存储'}</span>
+              <span>{selectedFile ? selectedFile.name : '选择本地视频、图片或音频并上传到服务器托管存储'}</span>
               <input
                 type="file"
-                accept={fileType === 'video' ? 'video/*' : 'image/*'}
+                accept={fileType === 'video' ? 'video/*' : fileType === 'image' ? 'image/*' : '.wav,.mp3,.aac,audio/wav,audio/mpeg,audio/aac'}
                 className="hidden"
                 onChange={event => setSelectedFile(event.target.files?.[0] || null)}
               />
@@ -277,8 +286,16 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
           </div>
 
           {/* Collapsible AI Parameters */}
-          <div className="bg-slate-800/40 p-4 rounded-xl border border-slate-800 space-y-3">
-            <span className="font-bold text-indigo-300 text-xs block">AI 影视生成参数 (仅供内部/复现场景)</span>
+          {fileType === 'audio' ? (
+            <p className="rounded-xl border border-slate-800 bg-slate-800/40 p-4 text-slate-500">音频版本无需填写 AI 图片/视频生成参数。</p>
+          ) : (
+          <details className="bg-slate-800/40 p-4 rounded-xl border border-slate-800 space-y-3">
+            <summary className="cursor-pointer font-bold text-indigo-300 text-xs">高级生成参数（默认折叠）</summary>
+            <div className="mt-3 space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-[10px] text-slate-500">生成平台<input value={generationPlatform} onChange={e => setGenerationPlatform(e.target.value)} className="mt-1 w-full rounded border border-slate-700 bg-slate-800 p-1.5 text-xs text-slate-200" /></label>
+              <label className="text-[10px] text-slate-500">参考图列表（逗号或换行分隔）<textarea value={referenceImages} onChange={e => setReferenceImages(e.target.value)} className="mt-1 w-full rounded border border-slate-700 bg-slate-800 p-1.5 text-xs text-slate-200" /></label>
+            </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -325,7 +342,14 @@ export const VersionUploadModal: React.FC<VersionUploadModalProps> = ({ initialT
                 className="w-full bg-slate-800 border border-slate-700 rounded p-1.5 text-xs font-mono text-slate-300 mt-0.5"
               />
             </div>
-          </div>
+            {fileType === 'video' && <div><label className="text-[10px] text-slate-500 block">镜头运动</label><input value={cameraMotion} onChange={e => setCameraMotion(e.target.value)} className="w-full rounded border border-slate-700 bg-slate-800 p-1.5 text-xs text-slate-200" /></div>}
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-[10px] text-slate-500">后期处理说明<textarea value={postProcessingNotes} onChange={e => setPostProcessingNotes(e.target.value)} className="mt-1 w-full rounded border border-slate-700 bg-slate-800 p-1.5 text-xs text-slate-200" /></label>
+              <label className="text-[10px] text-slate-500">修复后文件 URL<input type="url" value={repairedFileUrl} onChange={e => setRepairedFileUrl(e.target.value)} className="mt-1 w-full rounded border border-slate-700 bg-slate-800 p-1.5 text-xs text-slate-200" /></label>
+            </div>
+            </div>
+          </details>
+          )}
 
           <div className="flex justify-end space-x-2 pt-2 border-t border-slate-800">
             <button

@@ -6,6 +6,8 @@ import { validateEntityBelongsToProject } from './entityValidation';
 import { AUDIT_EVENTS, recordAuditLog } from './audit';
 import { canReviewVersion, canSubmitVersion, getProjectPermissionContext } from './permissions';
 import { serializeVersionForRole } from './versionSerialization';
+
+const VERSION_MEDIA_TYPES = new Set(['image', 'video', 'audio']);
 import { applyVersionStatusEffects, assertVersionStatusTransition, isEntityLockedForNonAdmin, recalculateEntityStatus } from './workflow';
 
 export const versionsRouter = Router();
@@ -71,12 +73,14 @@ versionsRouter.post('/', asyncHandler(async (req, res) => {
   }
   const fileUrl = normalizeFileUrl(null, req.body?.fileUrl);
   if (!fileUrl) { res.status(400).json({ error: '请先上传文件或提供文件 URL。' }); return; }
+  const fileType = readString(req.body?.fileType, 'image');
+  if (!VERSION_MEDIA_TYPES.has(fileType)) { res.status(400).json({ error: '版本媒体类型必须是 image、video 或 audio。' }); return; }
 
   const id = randomUUID();
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query(`INSERT INTO versions (id,task_id,entity_type,entity_id,version_number,file_url,file_type,thumbnail_url,uploader_id,changelog,status,ai_params) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)`, [id, req.body.taskId, entityType, entityId, readString(req.body?.versionNumber, 'V001'), fileUrl, readString(req.body?.fileType, 'image'), readString(req.body?.thumbnailUrl), req.authUser!.id, readString(req.body?.changelog), readString(req.body?.status, '待审核'), JSON.stringify(req.body?.aiParams ?? null)]);
+    await client.query(`INSERT INTO versions (id,task_id,entity_type,entity_id,version_number,file_url,file_type,thumbnail_url,uploader_id,changelog,status,ai_params) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)`, [id, req.body.taskId, entityType, entityId, readString(req.body?.versionNumber, 'V001'), fileUrl, fileType, fileType === 'audio' ? '' : readString(req.body?.thumbnailUrl), req.authUser!.id, readString(req.body?.changelog), readString(req.body?.status, '待审核'), JSON.stringify(req.body?.aiParams ?? null)]);
     await client.query('UPDATE tasks SET latest_version_id=$1,status=$2 WHERE id=$3', [id, '待审核', req.body.taskId]);
     if (entityType !== 'project') {
       await client.query(`UPDATE ${entityType === 'shot' ? 'shots' : 'assets'} SET latest_version_id=$1,thumbnail_url=coalesce(nullif($2,''),thumbnail_url) WHERE id=$3`, [id, readString(req.body?.thumbnailUrl), entityId]);

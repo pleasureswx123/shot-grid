@@ -31,25 +31,43 @@ export type TaskPriority = '高' | '中' | '低';
 
 export type VersionStatus = '待审核' | '已通过' | '已退回' | '最终版';
 
-export interface AIGenerationParams {
+export type VersionMediaType = 'image' | 'video' | 'audio';
+
+export interface AICommonGenerationParams {
+  mediaType: 'image' | 'video';
+  generationPlatform?: string; // 生成平台，例如可灵、Runway、Midjourney
   modelName: string;         // e.g. Runway Gen-3, Kling 1.5, Midjourney V6, Luma, Hailuo
   modelVersion?: string;     // e.g. v1.5 Pro
   prompt: string;            // 完整提示词
   negativePrompt?: string;
-  firstFrameUrl?: string;    // 首帧
-  lastFrameUrl?: string;     // 尾帧
-  refVideoUrl?: string;      // 参考视频
-  durationSec?: number;
   resolution?: string;       // e.g. 3840x2160
   aspectRatio?: string;      // e.g. 16:9
   seed?: string | number;
-  cameraMotion?: string;     // e.g. 缓慢推进, 环绕摇镜
   generationCost?: number;   // 生成费用 ($ or ¥)
+  referenceImageUrls?: string[]; // 参考图列表
   isPostProcessed?: boolean; // 是否经过后期修复
+  postProcessingNotes?: string; // 后期处理说明
+  repairedFileUrl?: string;  // 修复后文件
   rawGenerationUrl?: string; // 原始生成文件
   nasPath?: string;          // NAS源文件路径 e.g. \\NAS\NOMUD\EP01\SC03\SH010\video\v004\
   nasPlaybackUnsupported?: boolean;
 }
+
+export interface AIImageGenerationParams extends AICommonGenerationParams {
+  mediaType: 'image';
+  imageCount?: number;
+}
+
+export interface AIVideoGenerationParams extends AICommonGenerationParams {
+  mediaType: 'video';
+  firstFrameUrl?: string;
+  lastFrameUrl?: string;
+  refVideoUrl?: string;
+  durationSec?: number;
+  cameraMotion?: string;
+}
+
+export type AIGenerationParams = AIImageGenerationParams | AIVideoGenerationParams;
 
 export interface Version {
   id: string;
@@ -59,7 +77,7 @@ export interface Version {
   versionNumber: string;    // e.g. V001, V002
   fileId?: string;          // 托管文件 ID，对应 project_files.id
   fileUrl: string;          // MP4 video or PNG image, or /api/files/:id/content
-  fileType: 'video' | 'image';
+  fileType: VersionMediaType;
   thumbnailUrl: string;
   uploaderId: string;
   createdAt: string;
