@@ -220,6 +220,34 @@ maybeDescribe('server API integration routes', () => {
     assert.equal(rolledBack.rows[0].count, 0);
   });
 
+  test('bulk shot import saves dialogue, resolves typed assets, deduplicates separators, and rolls back', async () => {
+    const existing = await request('POST', '/api/assets', ids.creator, { projectId: ids.project, name: '阿青', category: '角色' });
+    assert.equal(existing.response.status, 201);
+    const imported = await request('POST', '/api/shots/bulk', ids.creator, {
+      projectId: ids.project,
+      shots: [{ sceneCode: 'SC01', shotCode: 'IMPORT01', dialogue: '快走！', characterAssets: '阿青， 阿青;机器人', sceneAssets: '基地、走廊', propAssets: '', otherAssets: '道具:阿青|风格参考:赛博朋克' }],
+    });
+    assert.equal(imported.response.status, 201);
+    assert.equal(imported.data.shots[0].dialogue, '快走！');
+    assert.deepEqual(imported.data.importReport.reusedAssets, [{ name: '阿青', category: '角色' }]);
+    assert.equal(imported.data.importReport.createdAssets.length, 5);
+    const linked = await pool.query(`SELECT a.name,a.category FROM shot_assets sa JOIN assets a ON a.id=sa.asset_id WHERE sa.shot_id=$1 ORDER BY a.category,a.name`, [imported.data.shots[0].id]);
+    assert.equal(linked.rowCount, 6);
+    assert.equal(linked.rows.filter(row => row.name === '阿青').length, 2, 'same name remains distinct across asset types');
+
+    const before = await pool.query('SELECT count(*)::int AS count FROM assets');
+    const failed = await request('POST', '/api/shots/bulk', ids.creator, {
+      projectId: ids.project,
+      shots: [
+        { sceneCode: 'SC02', shotCode: 'ROLLBACK01', characterAssets: '不应保留' },
+        { sceneCode: 'SC02', shotCode: 'ROLLBACK02', durationSec: -1 },
+      ],
+    });
+    assert.equal(failed.response.status, 500);
+    assert.equal((await pool.query(`SELECT count(*)::int AS count FROM shots WHERE shot_code LIKE 'ROLLBACK%'`)).rows[0].count, 0);
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM assets')).rows[0].count, before.rows[0].count);
+  });
+
   test('updates task status, rejects invalid entityType, creates versions, review notes, and chat messages', async () => {
     const asset = await request('POST', '/api/assets', ids.creator, { projectId: ids.project, name: '版本资产', category: '道具' });
     createdAssetId = asset.data.asset.id;

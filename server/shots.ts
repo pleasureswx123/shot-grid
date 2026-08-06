@@ -5,7 +5,7 @@ import { pool } from './db';
 import { isEntityLockedForNonAdmin, recalculateEntityStatus } from './workflow';
 import { asyncHandler, readNumber, readString, requireProjectAccessFromRequest, requireProjectWriteAccess, requireProjectWriteAccessFromRequest, UUID_PATTERN } from './apiUtils';
 import { ensureShotStorageStructure, removeShotStorageStructure } from './storage';
-import { insertTaskChain, SHOT_TASK_TEMPLATE } from './taskTemplates';
+import { ASSET_TASK_TEMPLATE, insertTaskChain, SHOT_TASK_TEMPLATE } from './taskTemplates';
 
 export const shotsRouter = Router();
 
@@ -27,14 +27,27 @@ const selectScene = `SELECT sc.id, sc.project_id AS "projectId", sc.scene_code A
   sc.description, count(sh.id)::int AS "shotCount"
   FROM scenes sc LEFT JOIN shots sh ON sh.scene_id = sc.id AND sh.deleted_at IS NULL`;
 
-const normalizeShotImport = (shot: any, index: number, fallbackAssigneeId: string) => ({
+const ASSET_CATEGORIES = new Set(['角色', '场景', '道具', '服装', '载具', '生物', '风格参考']);
+const splitAssetNames = (input: unknown) => String(input ?? '').split(/[,，;；、|\n]+/).map(name => name.trim()).filter(Boolean);
+
+export const normalizeShotImport = (shot: any, index: number, fallbackAssigneeId: string) => ({
   sceneCode: readString(shot?.sceneCode, 'SC01').toUpperCase(),
   shotCode: readString(shot?.shotCode, `SH${String(index + 1).padStart(3, '0')}`).toUpperCase(),
   description: readString(shot?.description, '导入镜头描述'),
   durationSec: readNumber(shot?.durationSec, 5),
   shotType: readString(shot?.shotType, '中景'),
   cameraMovement: readString(shot?.cameraMovement, '固定镜头'),
+  dialogue: readString(shot?.dialogue),
   assigneeId: readString(shot?.assigneeId, fallbackAssigneeId),
+  assets: [
+    ...splitAssetNames(shot?.characterAssets).map(name => ({ name, category: '角色' })),
+    ...splitAssetNames(shot?.sceneAssets).map(name => ({ name, category: '场景' })),
+    ...splitAssetNames(shot?.propAssets).map(name => ({ name, category: '道具' })),
+    ...splitAssetNames(shot?.otherAssets).map(entry => {
+      const match = entry.match(/^([^:：]+)[:：](.+)$/);
+      return match ? { category: match[1].trim(), name: match[2].trim() } : { category: '风格参考', name: entry };
+    }),
+  ],
 });
 
 shotsRouter.get('/', asyncHandler(async (request, response) => {
@@ -79,6 +92,10 @@ shotsRouter.post('/bulk', asyncHandler(async (request, response) => {
     const projectCode = project.rows[0].code;
     const importedShotIds: string[] = [];
     const importedSceneCodes = new Set<string>();
+    const createdAssets = new Map<string, { name: string; category: string }>();
+    const reusedAssets = new Map<string, { name: string; category: string }>();
+    const unmatchedAssets = new Map<string, { name: string; category: string; reason: string }>();
+    const resolvedAssets = new Map<string, string>();
 
     for (const shot of shots) {
       importedSceneCodes.add(shot.sceneCode);
@@ -92,20 +109,43 @@ shotsRouter.post('/bulk', asyncHandler(async (request, response) => {
       const shotId = randomUUID();
       const savedShot = await client.query<{ id: string }>(
         `INSERT INTO shots (id, project_id, scene_id, shot_code, duration_sec, shot_type, camera_movement, description, dialogue, current_stage, assignee_id, status, thumbnail_url)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'','台本',$9,'未开始',$10)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'台本',$10,'未开始',$11)
          ON CONFLICT (project_id, shot_code) DO UPDATE SET
            scene_id = EXCLUDED.scene_id,
            duration_sec = EXCLUDED.duration_sec,
            shot_type = EXCLUDED.shot_type,
            camera_movement = EXCLUDED.camera_movement,
            description = EXCLUDED.description,
+           dialogue = EXCLUDED.dialogue,
            current_stage = '台本',
            assignee_id = EXCLUDED.assignee_id
          RETURNING id`,
-        [shotId, projectId, scene.rows[0].id, shot.shotCode, shot.durationSec, shot.shotType, shot.cameraMovement, shot.description, shot.assigneeId, 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80'],
+        [shotId, projectId, scene.rows[0].id, shot.shotCode, shot.durationSec, shot.shotType, shot.cameraMovement, shot.description, shot.dialogue, shot.assigneeId, 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=600&auto=format&fit=crop&q=80'],
       );
       const savedShotId = savedShot.rows[0].id;
       importedShotIds.push(savedShotId);
+      await client.query('DELETE FROM shot_assets WHERE shot_id=$1', [savedShotId]);
+      const uniqueShotAssets = new Map<string, { name: string; category: string }>(shot.assets.map((asset: { name: string; category: string }) => [`${asset.category}\0${asset.name.toLocaleLowerCase('zh-CN')}`, asset]));
+      for (const [key, asset] of uniqueShotAssets) {
+        if (!asset.name || asset.name.length > 200 || !ASSET_CATEGORIES.has(asset.category)) {
+          unmatchedAssets.set(key, { ...asset, reason: !ASSET_CATEGORIES.has(asset.category) ? '不支持的资产类型' : '资产名称无效' });
+          continue;
+        }
+        let assetId = resolvedAssets.get(key);
+        if (!assetId) {
+          const existing = await client.query<{ id: string }>('SELECT id FROM assets WHERE project_id=$1 AND lower(name)=lower($2) AND category=$3 AND deleted_at IS NULL', [projectId, asset.name, asset.category]);
+          assetId = existing.rows[0]?.id;
+          if (assetId) reusedAssets.set(key, asset);
+          else {
+            assetId = randomUUID();
+            await client.query(`INSERT INTO assets (id,project_id,name,category,assignee_id,status,description) VALUES ($1,$2,$3,$4,$5,'未开始',$6)`, [assetId, projectId, asset.name, asset.category, shot.assigneeId, '从镜头表导入']);
+            await insertTaskChain(client, { projectId, entityType: 'asset', entityId: assetId, label: asset.name, assigneeId: shot.assigneeId, template: ASSET_TASK_TEMPLATE });
+            createdAssets.set(key, asset);
+          }
+          resolvedAssets.set(key, assetId);
+        }
+        await client.query('INSERT INTO shot_assets (shot_id,asset_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [savedShotId, assetId]);
+      }
       const directory = await ensureShotStorageStructure({ projectCode, shotId: savedShotId, shotCode: shot.shotCode, sceneCode: shot.sceneCode });
       if (directory.createdRoot) createdDirectories.push(shot.shotCode);
       await insertTaskChain(client, { projectId, entityType: 'shot', entityId: savedShotId, label: `${shot.sceneCode} / ${shot.shotCode}`, assigneeId: shot.assigneeId, template: SHOT_TASK_TEMPLATE });
@@ -116,7 +156,7 @@ shotsRouter.post('/bulk', asyncHandler(async (request, response) => {
     const scenesResult = await pool.query(`${selectScene} WHERE sc.project_id = $1 AND sc.scene_code = ANY($2::text[]) GROUP BY sc.id ORDER BY sc.sort_order ASC, sc.scene_code ASC`, [projectId, [...importedSceneCodes]]);
     const shotsResult = await pool.query(`${selectShot} FROM shots sh JOIN scenes sc ON sc.id = sh.scene_id LEFT JOIN shot_assets sa ON sa.shot_id = sh.id LEFT JOIN assets a ON a.id = sa.asset_id AND a.deleted_at IS NULL WHERE sh.id = ANY($1::uuid[]) AND sh.deleted_at IS NULL GROUP BY sh.id, sc.scene_code ORDER BY sh.sort_order ASC, sh.shot_code ASC`, [importedShotIds]);
     const tasksResult = await pool.query(`${selectTask} WHERE project_id = $1 AND entity_type = 'shot' AND entity_id = ANY($2::uuid[]) AND deleted_at IS NULL ORDER BY entity_id, due_date`, [projectId, importedShotIds]);
-    response.status(201).json({ scenes: scenesResult.rows, shots: shotsResult.rows, tasks: tasksResult.rows });
+    response.status(201).json({ scenes: scenesResult.rows, shots: shotsResult.rows, tasks: tasksResult.rows, importReport: { createdAssets: [...createdAssets.values()], reusedAssets: [...reusedAssets.values()], unmatchedAssets: [...unmatchedAssets.values()] } });
   } catch (e: any) {
     await client.query('ROLLBACK');
     const projectCode = await pool.query<{ code: string }>('SELECT code FROM projects WHERE id = $1', [projectId]).then(r => r.rows[0]?.code).catch(() => null);

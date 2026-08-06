@@ -72,7 +72,7 @@ interface AppContextType {
   completeReviewList: (id: string) => Promise<void>;
   archiveReviewList: (id: string) => Promise<void>;
   completeReviewListParticipant: (id: string, userId: string) => Promise<void>;
-  importShotsFromData: (importedShots: Array<{ sceneCode: string; shotCode: string; description: string; durationSec: number; shotType: string; cameraMovement: string; assetNames?: string }>) => Promise<void>;
+  importShotsFromData: (importedShots: Array<Record<string, unknown>>) => Promise<shotsApi.ShotImportReport>;
   sendChatMessage: (msg: Omit<ChatMessage, 'id' | 'createdAt'>) => Promise<void>;
   updateChatMessageMedia: (messageId: string, editedMediaUrl: string) => Promise<void>;
   toggleLikeMessage: (messageId: string, userId: string) => Promise<void>;
@@ -910,24 +910,30 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   const completeReviewListParticipant = (id: string, userId: string) => runReviewListAction(() => reviewsApi.completeReviewListParticipant(id, userId), '更新参与人审核状态失败。');
 
   // Batch import shots from parsed Excel / CSV array
-  const importShotsFromData = async (importedData: Array<{ sceneCode: string; shotCode: string; description: string; durationSec: number; shotType: string; cameraMovement: string; assetNames?: string }>): Promise<void> => {
+  const importShotsFromData = async (importedData: Array<Record<string, unknown>>): Promise<shotsApi.ShotImportReport> => {
     setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
     try {
-      await shotsApi.bulkCreateShots({
+      const result = await shotsApi.bulkCreateShots({
         projectId: project.id,
         shots: importedData.map((item, index) => ({
-          sceneCode: normalizeSceneCode(item.sceneCode),
-          shotCode: (item.shotCode || `SH${String(shots.length + index + 1).padStart(3, '0')}`)
+          sceneCode: normalizeSceneCode(String(item.sceneCode || '')),
+          shotCode: String(item.shotCode || `SH${String(shots.length + index + 1).padStart(3, '0')}`)
             .trim()
             .toUpperCase(),
           description: item.description || '导入镜头描述',
           durationSec: Number(item.durationSec) || 5,
           shotType: item.shotType || '中景',
           cameraMovement: item.cameraMovement || '固定镜头',
+          dialogue: item.dialogue || '',
+          characterAssets: item.characterAssets,
+          sceneAssets: item.sceneAssets,
+          propAssets: item.propAssets,
+          otherAssets: item.otherAssets,
           assigneeId: currentUser.id,
         })),
       });
       await refreshProjectData();
+      return result.importReport;
     } catch (error) {
       reportApiError(error, '导入镜头失败。');
       throw error;
