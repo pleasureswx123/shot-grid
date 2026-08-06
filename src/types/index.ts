@@ -264,3 +264,26 @@ export interface DepartmentChannel {
   isPrivate?: boolean;
   memberIds?: string[];
 }
+
+export type SearchResultType = 'shot' | 'asset' | 'file';
+
+export interface SearchResultItem {
+  id: string;
+  type: SearchResultType;
+  title: string;
+  subtitle?: string | null;
+  detail?: string | null;
+  entityType?: EntityType;
+  entityId?: string;
+}
+
+export interface SearchResponse {
+  query: string;
+  types: SearchResultType[];
+  limit: number;
+  results: {
+    shots: SearchResultItem[];
+    assets: SearchResultItem[];
+    files: SearchResultItem[];
+  };
+}

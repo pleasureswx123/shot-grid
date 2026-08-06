@@ -16,6 +16,7 @@ import { versionsRouter } from './versions';
 import { projectReviewListsRouter, reviewListsRouter } from './reviews';
 import { notesRouter, versionNotesRouter } from './notes';
 import { chatRouter } from './chat';
+import { searchRouter } from './search';
 import { accessLogger } from './audit';
 
 const projectRoot = process.cwd();
@@ -106,6 +107,7 @@ export const createApp = async () => {
   app.use('/api/versions/:versionId/notes', requireAuth, versionNotesRouter);
   app.use('/api/notes', requireAuth, notesRouter);
   app.use('/api/chat', requireAuth, chatRouter);
+  app.use('/api/search', requireAuth, searchRouter);
   app.get('/api/system/info', requireAuth, (request, response) => {
     response.json({
       name: 'ShotGrid Light',
