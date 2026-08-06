@@ -62,7 +62,7 @@ interface AppContextType {
     skippedCount: number;
   }>;
   addVersion: (versionData: Omit<Version, 'id' | 'createdAt'>) => Promise<void>;
-  uploadVersionFile: (file: File, metadata: { taskId: string; versionNumber: string; fileType: 'video' | 'image'; thumbnailUrl?: string; changelog?: string; aiParams?: unknown }) => Promise<ProjectFile>;
+  uploadVersionFile: (file: File, metadata: { taskId: string; versionNumber: string; fileType: Version['fileType']; thumbnailUrl?: string; changelog?: string; aiParams?: unknown }) => Promise<ProjectFile>;
   updateVersionStatus: (versionId: string, status: VersionStatus) => Promise<void>;
   addNote: (noteData: Omit<Note, 'id' | 'createdAt'>) => Promise<void>;
   updateTaskStatus: (taskId: string, status: TaskStatus) => Promise<void>;
@@ -784,7 +784,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
   };
 
 
-  const uploadVersionFile = async (file: File, metadata: { taskId: string; versionNumber: string; fileType: 'video' | 'image'; thumbnailUrl?: string; changelog?: string; aiParams?: unknown }) => {
+  const uploadVersionFile = async (file: File, metadata: { taskId: string; versionNumber: string; fileType: Version['fileType']; thumbnailUrl?: string; changelog?: string; aiParams?: unknown }) => {
     const task = tasks.find(item => item.id === metadata.taskId);
     if (!task) throw new Error('请选择有效任务。');
     const formData = new FormData();

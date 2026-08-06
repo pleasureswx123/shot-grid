@@ -378,11 +378,34 @@ maybeDescribe('server API integration routes', () => {
     review.set('entityId', asset.data.asset.id);
     review.set('versionNumber', 'V007');
     review.set('versionFileType', 'image');
-    review.set('file', new Blob(['review'], { type: 'text/plain' }), 'review.txt');
+    review.set('file', new Blob(['review'], { type: 'image/png' }), 'review.png');
     const created = await request('POST', '/api/files/upload', ids.creator, review);
     assert.equal(created.response.status, 201);
     const linked = await pool.query('SELECT f.version_id,v.version_number FROM project_files f JOIN versions v ON v.id=f.version_id WHERE f.id=$1', [created.data.file.id]);
     assert.equal(linked.rows[0].version_number, 'V007');
     assert.ok(linked.rows[0].version_id);
+  });
+
+  test('uploads WAV and MP3 review versions with audio media mapping', async () => {
+    const asset = await request('POST', '/api/assets', ids.creator, { projectId: ids.project, name: '音频审核资产', category: '道具' });
+    const task = await request('POST', '/api/tasks', ids.creator, { projectId: ids.project, entityType: 'asset', entityId: asset.data.asset.id, title: '音频审核任务', pipelineStage: '修改' });
+
+    for (const [extension, mime] of [['wav', 'audio/wav'], ['mp3', 'audio/mpeg']] as const) {
+      const form = new FormData();
+      form.set('projectId', ids.project);
+      form.set('fileType', 'review');
+      form.set('taskId', task.data.task.id);
+      form.set('entityType', 'asset');
+      form.set('entityId', asset.data.asset.id);
+      form.set('versionNumber', extension === 'wav' ? 'V101' : 'V102');
+      form.set('versionFileType', 'audio');
+      form.set('thumbnailUrl', 'https://example.test/should-be-removed.png');
+      form.set('file', new Blob(['audio fixture'], { type: mime }), `review.${extension}`);
+      const uploaded = await request('POST', '/api/files/upload', ids.creator, form);
+      assert.equal(uploaded.response.status, 201);
+      const version = await pool.query('SELECT file_type,thumbnail_url FROM versions WHERE id=$1', [uploaded.data.file.versionId]);
+      assert.equal(version.rows[0].file_type, 'audio');
+      assert.equal(version.rows[0].thumbnail_url, '');
+    }
   });
 });
