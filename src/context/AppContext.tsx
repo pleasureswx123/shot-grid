@@ -66,6 +66,7 @@ interface AppContextType {
   updateVersionStatus: (versionId: string, status: VersionStatus) => Promise<void>;
   addNote: (noteData: Omit<Note, 'id' | 'createdAt'>) => Promise<void>;
   updateTaskStatus: (taskId: string, status: TaskStatus) => Promise<void>;
+  updateTaskAssignee: (taskId: string, assigneeId: string) => Promise<void>;
   createReviewList: (title: string, date: string, versionIds: string[], description?: string, options?: { roundNumber?: number; dueAt?: string | null; participants?: ReviewListParticipant[] }) => Promise<void>;
   submitReviewList: (id: string) => Promise<void>;
   completeReviewList: (id: string) => Promise<void>;
@@ -881,6 +882,19 @@ export const AppProvider: React.FC<AppProviderProps> = ({
     }
   };
 
+  const updateTaskAssignee = async (taskId: string, assigneeId: string) => {
+    setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
+    try {
+      const { task } = await tasksApi.updateTask(taskId, { assigneeId });
+      setTasks(previous => previous.map(item => item.id === taskId ? task : item));
+    } catch (error) {
+      reportApiError(error, '更新任务负责人失败。');
+      throw error;
+    } finally {
+      setApiStatus(previous => ({ ...previous, isSaving: false }));
+    }
+  };
+
   // Create Review List (Playlist)
   const runReviewListAction = async (action: () => Promise<{ reviewList: ReviewList }>, errorMessage: string) => {
     setApiStatus(previous => ({ ...previous, isSaving: true, error: null, permissionDenied: false, conflict: false }));
@@ -1044,6 +1058,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({
         updateVersionStatus,
         addNote,
         updateTaskStatus,
+        updateTaskAssignee,
         createReviewList,
         submitReviewList,
         completeReviewList,

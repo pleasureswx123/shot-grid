@@ -6,6 +6,7 @@ import {
   User, Film, Layers, Share2, Info, CheckCircle2, Copy
 } from 'lucide-react';
 import { Shot, Version, VersionStatus } from '../../types';
+import { TaskDetailCard } from '../tasks/TaskDetailCard';
 
 interface ShotDetailDrawerProps {
   shotId: string;
@@ -222,6 +223,16 @@ export const ShotDetailDrawer: React.FC<ShotDetailDrawerProps> = ({ shotId, onCl
           </div>
 
           {/* Middle Section: Versions Strip */}
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold text-white">任务详情</h3>
+              <span className="text-[10px] text-slate-500">共 {shotTasks.length} 项</span>
+            </div>
+            {shotTasks.length > 0
+              ? shotTasks.map(task => <TaskDetailCard key={task.id} task={task} />)
+              : <div className="rounded-xl border border-dashed border-slate-700 p-5 text-center text-xs text-slate-500">该镜头暂无任务</div>}
+          </section>
+
           <div className="bg-slate-800/40 border border-slate-800 rounded-xl p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">

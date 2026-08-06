@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
   Clock, AlertTriangle, CheckCircle2, PlayCircle, Lock,
   PlusCircle, Sparkles, ChevronRight, User, Calendar
 } from 'lucide-react';
 import { Task, Version } from '../../types';
+import { TaskDetailCard } from '../tasks/TaskDetailCard';
 
 interface WorkbenchViewProps {
   onOpenNewVersion: (taskId?: string) => void;
@@ -12,6 +13,7 @@ interface WorkbenchViewProps {
 
 export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }) => {
   const { currentUser, tasks, shots, assets, versions, updateTaskStatus, setSelectedShotId, setActiveTab } = useApp();
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
   // Filter tasks based on current user
   const myMakingTasks = tasks.filter(t => t.assigneeId === currentUser.id && t.status === '制作中');
@@ -143,7 +145,11 @@ export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }
               您当前没有分配的活跃制作任务，请切换角色或在镜头管理中分配任务。
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="space-y-4">
+              {selectedTaskId && tasks.find(task => task.id === selectedTaskId) && (
+                <TaskDetailCard task={tasks.find(task => task.id === selectedTaskId)!} />
+              )}
+              <div className="overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="border-b border-slate-800 text-slate-400 font-medium pb-2">
@@ -160,7 +166,11 @@ export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }
                     const shot = shots.find(s => s.id === task.entityId);
                     const isProjectTask = task.entityType === 'project';
                     return (
-                      <tr key={task.id} className="hover:bg-slate-800/40 transition">
+                      <tr
+                        key={task.id}
+                        onClick={() => setSelectedTaskId(task.id)}
+                        className={`cursor-pointer transition ${selectedTaskId === task.id ? 'bg-indigo-500/10' : 'hover:bg-slate-800/40'}`}
+                      >
                         <td className="py-3 px-3">
                           <div className="font-semibold text-slate-200">{task.title}</div>
                           {shot && (
@@ -214,6 +224,7 @@ export const WorkbenchView: React.FC<WorkbenchViewProps> = ({ onOpenNewVersion }
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
         </div>
